@@ -590,12 +590,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Start log send failed: {e}")
     msg = render_welcome_message(user)
+    # Send spoiler image with keyboard attached.
+    # All callback handlers use safe edit helpers to avoid Telegram errors.
     await update.message.reply_photo(
         photo=START_IMAGE_URL,
         caption=msg,
         parse_mode="HTML",
         has_spoiler=True,
-        reply_markup=main_menu_kb()
+        reply_markup=main_menu_kb(),
     )
 
 # ─── BROWSE NUMBERS ──────────────────────────────────────────────────────────
@@ -685,7 +687,12 @@ async def country_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = query.data.split("_", 1)[1]
     c = get_country(code)
     if not c:
-        await query.edit_message_text("Country not found.")
+        await safe_edit_callback_message(
+            query,
+            text="Country not found.",
+            parse_mode="HTML",
+            reply_markup=None,
+        )
         return
     stock = get_stock_count(code)
 
@@ -693,13 +700,16 @@ async def country_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔙 Back", callback_data="browse_0")],
         ])
-        await query.edit_message_text(
-            f"{c['flag']} *{c['name']}*\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"❌ *No stock available at the moment*\n"
-            f"━━━━━━━━━━━━━━━━━━━━",
+        await safe_edit_callback_message(
+            query,
+            text=(
+                f"{c['flag']} *{c['name']}*\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"❌ *No stock available at the moment*\n"
+                f"━━━━━━━━━━━━━━━━━━━━"
+            ),
             parse_mode="Markdown",
-            reply_markup=kb
+            reply_markup=kb,
         )
         return
 
@@ -720,7 +730,12 @@ async def country_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(f"💰 Buy from Wallet  (Bal: ₹{wallet:.2f})", callback_data=f"wallet_buy_{code}")],
         [InlineKeyboardButton("🔙 Back", callback_data="browse_0")],
     ])
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
+    await safe_edit_callback_message(
+        query,
+        text=text,
+        parse_mode="Markdown",
+        reply_markup=kb,
+    )
 
 # ─── WALLET BUY ──────────────────────────────────────────────────────────────
 async def wallet_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -735,7 +750,12 @@ async def wallet_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_row = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
     if not user_row:
         conn.close()
-        await query.edit_message_text("User not found.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"country_{code}")]]))
+        await safe_edit_callback_message(
+            query,
+            text="User not found.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"country_{code}")]]),
+        )
         return
     wallet = user_row["wallet_balance"]
     price = c["price_inr"]
@@ -744,9 +764,11 @@ async def wallet_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("➕ Deposit Funds", callback_data="deposit")],
             [InlineKeyboardButton("🔙 Back", callback_data=f"country_{code}")],
         ])
-        await query.edit_message_text(
-            f"❌ Insufficient balance.\nNeed ₹{price:.0f}, you have ₹{wallet:.2f}.",
-            reply_markup=kb
+        await safe_edit_callback_message(
+            query,
+            text=f"❌ Insufficient balance.\nNeed ₹{price:.0f}, you have ₹{wallet:.2f}.",
+            parse_mode="HTML",
+            reply_markup=kb,
         )
         conn.close()
         return
@@ -755,7 +777,12 @@ async def wallet_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ).fetchone()
     if not acc:
         conn.close()
-        await query.edit_message_text("❌ No accounts available right now.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"country_{code}")]]))
+        await safe_edit_callback_message(
+            query,
+            text="❌ No accounts available right now.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"country_{code}")]]),
+        )
         return
     now = now_ist().isoformat()
     conn.execute("UPDATE accounts SET is_sold=1, sold_to=?, sold_at=? WHERE id=?", (user_id, now, acc["id"]))
@@ -768,7 +795,12 @@ async def wallet_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     await send_buy_log(context, c["name"], c["flag"], c["price_inr"], acc["phone_number"])
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("📱 Reveal My Number", callback_data=f"reveal_{order_id}")]])
-    await query.edit_message_text("✅ Purchased successfully!", reply_markup=kb)
+    await safe_edit_callback_message(
+        query,
+        text="✅ Purchased successfully!",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
 
 # ─── PAY METHOD (UPI ONLY) ───────────────────────────────────────────────────
 async def pay_method(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -913,13 +945,23 @@ async def reveal_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
     order = conn.execute("SELECT * FROM orders WHERE id=? AND user_id=?", (order_id, user_id)).fetchone()
     if not order or order["status"] != "approved":
         conn.close()
-        await query.edit_message_text("❌ Order not found or not approved.")
+        await safe_edit_callback_message(
+            query,
+            text="❌ Order not found or not approved.",
+            parse_mode="HTML",
+            reply_markup=None,
+        )
         return
     acc = conn.execute("SELECT * FROM accounts WHERE id=?", (order["account_id"],)).fetchone()
     c = get_country(order["country_code"])
     conn.close()
     if not acc:
-        await query.edit_message_text("❌ Account data not found.")
+        await safe_edit_callback_message(
+            query,
+            text="❌ Account data not found.",
+            parse_mode="HTML",
+            reply_markup=None,
+        )
         return
     text = (
         f"📱 *Your Number Details*\n"
@@ -933,7 +975,12 @@ async def reveal_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📨 Get Latest OTP", callback_data=f"getotp_{acc['id']}")],
         [InlineKeyboardButton("📦 My Orders", callback_data="my_orders_0")],
     ])
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
+    await safe_edit_callback_message(
+        query,
+        text=text,
+        parse_mode="Markdown",
+        reply_markup=kb,
+    )
 
 # ─── GET OTP ──────────────────────────────────────────────────────────────────
 async def get_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -946,9 +993,19 @@ async def get_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     acc = conn.execute("SELECT * FROM accounts WHERE id=?", (acc_id,)).fetchone()
     conn.close()
     if not acc:
-        await query.edit_message_text("❌ Account not found.")
+        await safe_edit_callback_message(
+            query,
+            text="❌ Account not found.",
+            parse_mode="HTML",
+            reply_markup=None,
+        )
         return
-    await query.edit_message_text("⏳ Connecting to fetch OTP...")
+    await safe_edit_callback_message(
+        query,
+        text="⏳ Connecting to fetch OTP...",
+        parse_mode="HTML",
+        reply_markup=None,
+    )
     otp_code = None
     error_msg = None
     client = TelegramClient(StringSession(acc["session_string"]), API_ID, API_HASH)
@@ -971,7 +1028,12 @@ async def get_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if error_msg:
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"reveal_{_get_order_for_account(acc_id)}")]])
-        await query.edit_message_text(error_msg, reply_markup=kb)
+        await safe_edit_callback_message(
+            query,
+            text=error_msg,
+            parse_mode="HTML",
+            reply_markup=kb,
+        )
         return
 
     text = (
@@ -984,7 +1046,12 @@ async def get_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔄 Refresh OTP", callback_data=f"getotp_{acc_id}")],
         [InlineKeyboardButton("🔙 Back", callback_data=f"getotp_back_{acc_id}")],
     ])
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
+    await safe_edit_callback_message(
+        query,
+        text=text,
+        parse_mode="Markdown",
+        reply_markup=kb,
+    )
 
 async def _fetch_otp(client):
     otp_pattern = re.compile(r'\b\d{4,6}\b')
@@ -1035,7 +1102,12 @@ async def wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📋 Deposit History", callback_data="dep_hist_0")],
         [InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")],
     ])
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
+    await safe_edit_callback_message(
+        query,
+        text=text,
+        parse_mode="Markdown",
+        reply_markup=kb,
+    )
 
 # ─── DEPOSIT (UPI ONLY) ───────────────────────────────────────────────────────
 async def deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1044,12 +1116,15 @@ async def deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await guard(update, context):
         return
     context.user_data["awaiting_dep_amount"] = True
-    await query.edit_message_text(
-        "💳 *UPI Deposit*\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "Enter amount in INR to deposit:\n_(Minimum ₹50)_",
+    await safe_edit_callback_message(
+        query,
+        text=(
+            "💳 *UPI Deposit*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Enter amount in INR to deposit:\n_(Minimum ₹50)_"
+        ),
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="wallet")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="wallet")]]),
     )
 
 # ─── TEXT HANDLER ─────────────────────────────────────────────────────────────
@@ -1334,7 +1409,12 @@ async def _finalize_add_account(update, context):
     if hasattr(update, "message") and update.message:
         await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=kb)
     else:
-        await update.callback_query.edit_message_text(msg, parse_mode="Markdown", reply_markup=kb)
+        await safe_edit_callback_message(
+            update.callback_query,
+            text=msg,
+            parse_mode="Markdown",
+            reply_markup=kb,
+        )
 
 # ─── UPLOAD DEP SCREENSHOT ────────────────────────────────────────────────────
 async def upload_dep_screenshot_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1369,7 +1449,12 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ).fetchall()
     conn.close()
     if not orders:
-        await query.edit_message_text("📦 No orders yet.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]]))
+        await safe_edit_callback_message(
+            query,
+            text="📦 No orders yet.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]]),
+        )
         return
     per_page = 5
     total = len(orders)
@@ -1390,7 +1475,12 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if nav:
         buttons.append(nav)
     buttons.append([InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")])
-    await query.edit_message_text("📦 *My Orders*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+    await safe_edit_callback_message(
+        query,
+        text="📦 *My Orders*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
 
 async def order_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1406,7 +1496,12 @@ async def order_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ).fetchone()
     conn.close()
     if not o:
-        await query.edit_message_text("❌ Order not found.")
+        await safe_edit_callback_message(
+            query,
+            text="❌ Order not found.",
+            parse_mode="HTML",
+            reply_markup=None,
+        )
         return
     text = (
         f"📦 *Order #{o['id']}*\n"
@@ -1422,7 +1517,12 @@ async def order_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if o["status"] == "approved" and o["account_id"]:
         buttons.append([InlineKeyboardButton("📱 Reveal Number", callback_data=f"reveal_{o['id']}")])
     buttons.append([InlineKeyboardButton("🔙 My Orders", callback_data="my_orders_0")])
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+    await safe_edit_callback_message(
+        query,
+        text=text,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
 
 # ─── DEPOSIT HISTORY ──────────────────────────────────────────────────────────
 async def dep_hist(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1438,7 +1538,12 @@ async def dep_hist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ).fetchall()
     conn.close()
     if not deps:
-        await query.edit_message_text("No deposits yet.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Wallet", callback_data="wallet")]]))
+        await safe_edit_callback_message(
+            query,
+            text="No deposits yet.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Wallet", callback_data="wallet")]]),
+        )
         return
     per_page = 5
     total = len(deps)
@@ -1460,7 +1565,12 @@ async def dep_hist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if nav:
         buttons.append(nav)
     buttons.append([InlineKeyboardButton("🔙 Wallet", callback_data="wallet")])
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+    await safe_edit_callback_message(
+        query,
+        text=text,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
 
 # ─── HELP ─────────────────────────────────────────────────────────────────────
 async def help_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2000,7 +2110,12 @@ async def _show_user_profile(update, context, row, via_message=False):
     if via_message:
         await update.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
     else:
-        await update.callback_query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
+        await safe_edit_callback_message(
+            update.callback_query,
+            text=text,
+            parse_mode="Markdown",
+            reply_markup=kb,
+        )
 
 async def ban_uid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
