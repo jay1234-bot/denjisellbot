@@ -36,6 +36,7 @@ ADMIN_GROUP_ID = -1003564044316
 # Successful buy logs will be sent here (set your channel/group id)
 LOG_GROUP_ID = -1003929185913
 STORE_BOT_USERNAME = "XR_OTP_BOT"
+START_IMAGE_URL = "https://te.legra.ph/file/3e40a408286d4eda24191.jpg"
 API_ID    = 22091901
 API_HASH  = "54b0cd5fb47a40265b197f1a110b20b8"
 UPI_ID = "maurya.xq@fam"
@@ -370,15 +371,7 @@ def init_db():
     );
     """)
     c.execute("INSERT OR IGNORE INTO settings VALUES ('maintenance','0')")
-    new_welcome = (
-        "✨ ᴡᴇʟᴄᴏᴍᴇ ᴛᴏ ɴᴜᴍʙᴇʀsᴛᴏʀᴇ\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "⚡ ɢᴇᴛ ᴠᴇʀɪꜰɪᴇᴅ ɴᴜᴍʙᴇʀs ᴡɪᴛʜ ꜰᴀsᴛ ᴀᴜᴛᴏ ᴅᴇʟɪᴠᴇʀʏ.\n"
-        "🔐 sᴀꜰᴇ ᴄʜᴇᴄᴋᴏᴜᴛ • ᴄʟᴇᴀɴ ᴜɪ • ʀᴇʟɪᴀʙʟᴇ sᴛᴏᴄᴋ.\n"
-        "📲 ʙʀᴏᴡsᴇ ᴀ ᴄᴀᴛᴇɢᴏʀʏ, ᴘᴀʏ, ᴀɴᴅ ɢᴇᴛ ɪɴsᴛᴀɴᴛ ᴀᴄᴄᴇss.\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "💡 ɴᴇᴇᴅ ʜᴇʟᴘ? ᴛᴀᴘ ʜᴇʟᴘ ʙᴇʟᴏᴡ."
-    )
+    new_welcome = get_default_welcome_template()
     c.execute("INSERT OR IGNORE INTO settings VALUES ('welcome_message',?)", (new_welcome,))
     # One-time migration: replace old default welcome with new styled welcome.
     row = c.execute("SELECT value FROM settings WHERE key='welcome_message'").fetchone()
@@ -474,6 +467,27 @@ def main_menu_kb():
          InlineKeyboardButton("❓ ʜᴇʟᴘ", callback_data="help")],
     ])
 
+def get_default_welcome_template():
+    return (
+        "<b>ᴡᴇʟᴄᴏᴍᴇ {user_name}</b>\n"
+        "<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
+        "<b>✦ ᴘʀᴇᴍɪᴜᴍ ᴠᴇʀɪꜰɪᴇᴅ ɴᴜᴍʙᴇʀs ᴡɪᴛʜ ꜰᴀsᴛ ᴅᴇʟɪᴠᴇʀʏ</b>\n"
+        "<b>✦ ꜱᴇᴄᴜʀᴇᴅ ɪᴅ ᴄʜᴇᴄᴋᴏᴜᴛ</b>\n"
+        "<b>✦ ɴᴏ ᴘʜɪꜱʜɪɴɢ ᴀᴄᴄᴏᴜɴᴛꜱ</b>\n"
+        "<b>✦ ᴄʟᴇᴀɴ ᴀɴᴅ ᴛʀᴜꜱᴛᴇᴅ ꜱᴛᴏᴄᴋ</b>\n"
+        "<b>✦ ɪɴꜱᴛᴀɴᴛ ᴀᴄᴄᴇꜱꜱ ᴀꜰᴛᴇʀ ᴀᴘᴘʀᴏᴠᴀʟ</b>\n"
+        "<b>✦ ꜰᴀꜱᴛ ꜱᴜᴘᴘᴏʀᴛ ᴡʜᴇɴ ʏᴏᴜ ɴᴇᴇᴅ ʜᴇʟᴘ</b>\n"
+        "<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
+        "<b>ɢᴇᴛ ᴘʀᴇᴍɪᴜᴍ ǫᴜᴀʟɪᴛʏ, ꜱᴍᴏᴏᴛʜ ʙᴜʏɪɴɢ, ᴀɴᴅ ᴀ ᴄʟᴇᴀɴ ᴇxᴘᴇʀɪᴇɴᴄᴇ ꜰʀᴏᴍ ꜱᴛᴀʀᴛ ᴛᴏ ᴅᴇʟɪᴠᴇʀʏ.</b>\n"
+        "<b>ᴛᴀᴘ ᴀɴʏ ʙᴜᴛᴛᴏɴ ʙᴇʟᴏᴡ ᴛᴏ ᴄᴏɴᴛɪɴᴜᴇ.</b>"
+    )
+
+def render_welcome_message(user):
+    full_name = " ".join(x for x in [getattr(user, "first_name", ""), getattr(user, "last_name", "")] if x) or "User"
+    template = get_setting("welcome_message", get_default_welcome_template())
+    safe_name = escape(full_name)
+    return template.replace("{user_name}", safe_name)
+
 def generate_upi_qr(amount, note):
     upi_url = f"upi://pay?pa={UPI_ID}&pn=NumberStore&am={amount}&cu=INR&tn={note}"
     qr = qrcode.QRCode(version=1, box_size=10, border=4)
@@ -556,17 +570,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=admin_log, parse_mode="HTML")
         except Exception as e:
             logger.error(f"Start log send failed: {e}")
-    msg = get_setting(
-        "welcome_message",
-        "✨ ᴡᴇʟᴄᴏᴍᴇ ᴛᴏ ɴᴜᴍʙᴇʀsᴛᴏʀᴇ\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "⚡ ɢᴇᴛ ᴠᴇʀɪꜰɪᴇᴅ ɴᴜᴍʙᴇʀs ᴡɪᴛʜ ꜰᴀsᴛ ᴀᴜᴛᴏ ᴅᴇʟɪᴠᴇʀʏ.\n"
-        "🔐 sᴀꜰᴇ ᴄʜᴇᴄᴋᴏᴜᴛ • ᴄʟᴇᴀɴ ᴜɪ • ʀᴇʟɪᴀʙʟᴇ sᴛᴏᴄᴋ.\n"
-        "📲 ʙʀᴏᴡsᴇ ᴀ ᴄᴀᴛᴇɢᴏʀʏ, ᴘᴀʏ, ᴀɴᴅ ɢᴇᴛ ɪɴsᴛᴀɴᴛ ᴀᴄᴄᴇss.\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "💡 ɴᴇᴇᴅ ʜᴇʟᴘ? ᴛᴀᴘ ʜᴇʟᴘ ʙᴇʟᴏᴡ."
+    msg = render_welcome_message(user)
+    await update.message.reply_photo(
+        photo=START_IMAGE_URL,
+        caption=msg,
+        parse_mode="HTML",
+        has_spoiler=True,
+        reply_markup=main_menu_kb()
     )
-    await update.message.reply_text(msg, reply_markup=main_menu_kb())
 
 # ─── BROWSE NUMBERS ──────────────────────────────────────────────────────────
 async def browse_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1432,37 +1443,29 @@ async def help_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
-        "❓ *How to Buy Numbers*\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "1️⃣ Browse countries\n"
-        "2️⃣ Select & pay via UPI\n"
-        "3️⃣ Upload payment screenshot\n"
-        "4️⃣ Wait for admin approval\n"
-        "5️⃣ Reveal your number & get OTP\n"
-        "━━━━━━━━━━━━━━━━━━━━"
+        "<b>❓ ʜᴏᴡ ᴛᴏ ʙᴜʏ ɴᴜᴍʙᴇʀꜱ</b>\n"
+        "<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
+        "<b>• ʙʀᴏᴡꜱᴇ ᴀᴠᴀɪʟᴀʙʟᴇ ᴄᴏᴜɴᴛʀɪᴇꜱ</b>\n"
+        "<b>• ꜱᴇʟᴇᴄᴛ ʏᴏᴜʀ ɴᴇᴇᴅᴇᴅ ɴᴜᴍʙᴇʀ</b>\n"
+        "<b>• ᴘᴀʏ ꜱᴇᴄᴜʀᴇʟʏ ᴠɪᴀ ᴜᴘɪ</b>\n"
+        "<b>• ᴜᴘʟᴏᴀᴅ ʏᴏᴜʀ ᴘᴀʏᴍᴇɴᴛ ꜱᴄʀᴇᴇɴꜱʜᴏᴛ</b>\n"
+        "<b>• ɢᴇᴛ ᴀᴘᴘʀᴏᴠᴇᴅ ᴀɴᴅ ʀᴇᴠᴇᴀʟ ʏᴏᴜʀ ɴᴜᴍʙᴇʀ</b>\n"
+        "<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
+        "<b>ɪꜰ ʏᴏᴜ ɴᴇᴇᴅ ᴀɴʏ ᴀꜱꜱɪꜱᴛᴀɴᴄᴇ, ᴏᴘᴇɴ ꜱᴜᴘᴘᴏʀᴛ ᴀɴᴅ ꜱᴇʟᴇᴄᴛ ᴛʜᴇ ʟɪɴᴋ ʙᴇʟᴏᴡ.</b>"
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("💬 Contact Support", url="https://t.me/support")],
-        [InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")],
+        [InlineKeyboardButton("💬 ᴄᴏɴᴛᴀᴄᴛ ꜱᴜᴘᴘᴏʀᴛ", url="https://t.me/ll_PRIME_DENJI_ll")],
+        [InlineKeyboardButton("🔙 ᴍᴀɪɴ ᴍᴇɴᴜ", callback_data="main_menu")],
     ])
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
 
 async def main_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     if await guard(update, context):
         return
-    msg = get_setting(
-        "welcome_message",
-        "✨ ᴡᴇʟᴄᴏᴍᴇ ᴛᴏ ɴᴜᴍʙᴇʀsᴛᴏʀᴇ\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "⚡ ɢᴇᴛ ᴠᴇʀɪꜰɪᴇᴅ ɴᴜᴍʙᴇʀs ᴡɪᴛʜ ꜰᴀsᴛ ᴀᴜᴛᴏ ᴅᴇʟɪᴠᴇʀʏ.\n"
-        "🔐 sᴀꜰᴇ ᴄʜᴇᴄᴋᴏᴜᴛ • ᴄʟᴇᴀɴ ᴜɪ • ʀᴇʟɪᴀʙʟᴇ sᴛᴏᴄᴋ.\n"
-        "📲 ʙʀᴏᴡsᴇ ᴀ ᴄᴀᴛᴇɢᴏʀʏ, ᴘᴀʏ, ᴀɴᴅ ɢᴇᴛ ɪɴsᴛᴀɴᴛ ᴀᴄᴄᴇss.\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "💡 ɴᴇᴇᴅ ʜᴇʟᴘ? ᴛᴀᴘ ʜᴇʟᴘ ʙᴇʟᴏᴡ."
-    )
-    await query.edit_message_text(msg, reply_markup=main_menu_kb())
+    msg = render_welcome_message(update.effective_user)
+    await query.edit_message_text(msg, parse_mode="HTML", reply_markup=main_menu_kb())
 
 # ─── ADMIN GROUP APPROVALS ────────────────────────────────────────────────────
 async def approve_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
