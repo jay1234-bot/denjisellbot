@@ -488,6 +488,25 @@ def render_welcome_message(user):
     safe_name = escape(full_name)
     return template.replace("{user_name}", safe_name)
 
+async def safe_edit_callback_message(query, *, text: str, parse_mode: str, reply_markup=None):
+    """
+    If the callback message is a photo, Telegram only allows editing the caption.
+    This prevents: 'There is no text in the message to edit'.
+    """
+    msg = getattr(query, "message", None)
+    if msg is not None and getattr(msg, "photo", None):
+        await query.edit_message_caption(
+            caption=text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+    else:
+        await query.edit_message_text(
+            text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+
 def generate_upi_qr(amount, note):
     upi_url = f"upi://pay?pa={UPI_ID}&pn=NumberStore&am={amount}&cu=INR&tn={note}"
     qr = qrcode.QRCode(version=1, box_size=10, border=4)
@@ -603,10 +622,11 @@ async def browse_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if total == 0:
         buttons = [[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]]
-        await query.edit_message_text(
-            "📦 *No stock available at the moment. Please check back later!*",
+        await safe_edit_callback_message(
+            query,
+            text="📦 *No stock available at the moment. Please check back later!*",
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(buttons)
+            reply_markup=InlineKeyboardMarkup(buttons),
         )
         return
 
@@ -643,8 +663,12 @@ async def browse_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         buttons.append(nav)
     buttons.append([InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")])
 
-    await query.edit_message_text(full_text, parse_mode="Markdown",
-                                  reply_markup=InlineKeyboardMarkup(buttons))
+    await safe_edit_callback_message(
+        query,
+        text=full_text,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
 
 async def oos_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer("❌ Out of stock!", show_alert=True)
@@ -1457,7 +1481,7 @@ async def help_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("💬 ᴄᴏɴᴛᴀᴄᴛ ꜱᴜᴘᴘᴏʀᴛ", url="https://t.me/ll_PRIME_DENJI_ll")],
         [InlineKeyboardButton("🔙 ᴍᴀɪɴ ᴍᴇɴᴜ", callback_data="main_menu")],
     ])
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+    await safe_edit_callback_message(query, text=text, parse_mode="HTML", reply_markup=kb)
 
 async def main_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1465,7 +1489,7 @@ async def main_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await guard(update, context):
         return
     msg = render_welcome_message(update.effective_user)
-    await query.edit_message_text(msg, parse_mode="HTML", reply_markup=main_menu_kb())
+    await safe_edit_callback_message(query, text=msg, parse_mode="HTML", reply_markup=main_menu_kb())
 
 # ─── ADMIN GROUP APPROVALS ────────────────────────────────────────────────────
 async def approve_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2203,6 +2227,12 @@ async def skip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     init_db()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    async def _global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+        # Keep logs clean: avoid long stack traces in terminal.
+        err = context.error
+        logger.error(f"Bot error: {type(err).__name__}: {err}")
+
     # Commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_cmd))
@@ -2267,8 +2297,17 @@ def main():
     # Message handlers
     app.add_handler(MessageHandler(filters.PHOTO, screenshot_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+
+    app.add_error_handler(_global_error_handler)
     logger.info("Bot started!")
-    app.run_polling(drop_pending_updates=True)
+    try:
+        app.run_polling(drop_pending_updates=True)
+    except Exception as e:
+        # Common when 2 instances are started with the same token.
+        if "Conflict" in str(e) and "getUpdates" in str(e):
+            logger.error("Multiple bot instances detected. Stop older instance and restart.")
+            return
+        raise
 
 if __name__ == "__main__":
     main()
