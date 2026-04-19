@@ -1,0 +1,7 @@
+pymongo[srv]>=4.6
+python-telegram-bot>=20.0
+telethon>=1.34
+qrcode[pil]>=7.4
+Pillow>=10.0
+# Do not add kurigram/pyrogram alongside python-telegram-bot on the same bot token (getUpdates conflict).
+# Premium custom emoji uses Bot API HTML <tg-emoji> via en.json — see i18n.py

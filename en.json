@@ -1,0 +1,190 @@
+{
+  "_comment": "Telegram: button tint via style (primary/success/danger); premium icon via icon_custom_emoji_id (ibutton). Text can still use emoji accents.",
+  "_premium_emoji_howto": [
+    "1) Register each emoji once: add ONE key under BOTH _emoji (Telegram custom_emoji_id number) AND _emoji_char (normal emoji fallback if id is wrong).",
+    "2) Messages: use {{e:yourkey}} in any string loaded with t() + parse_mode HTML.",
+    "3) Buttons: _button_style = Telegram tint only — primary=blue, success=green, danger=red (no custom hex). Pair with _button_emoji for premium icons.",
+    "4) Requires Telegram Premium on the BOT OWNER account (or Fragment username for bot). See Bot API InlineKeyboardButton icon_custom_emoji_id.",
+    "5) Get custom_emoji_id: @RawDataBot / message.entities custom_emoji_id.",
+    "6) Leave _emoji slot \"\" to disable premium for that slot (fallback char only)."
+  ],
+  "_button_emoji": {
+    "menu.btn_browse": "globe",
+    "menu.btn_wallet": "wallet",
+    "menu.btn_orders": "package",
+    "menu.btn_help": "megaphone",
+    "common.main_menu": "inbox",
+    "common.back": "package",
+    "common.cancel": "cross",
+    "browse.btn_prev": "star",
+    "browse.btn_next": "star",
+    "browse.btn_page": "star",
+    "orders.btn_prev": "star",
+    "orders.btn_next": "star",
+    "country.btn_pay_upi": "wallet",
+    "country.btn_wallet_buy": "wallet",
+    "country.btn_back_browse": "package",
+    "wallet.btn_deposit": "wallet",
+    "wallet.btn_dep_hist": "chart",
+    "wallet.btn_back_wallet": "wallet",
+    "buy.btn_reveal": "check",
+    "buy.btn_deposit": "wallet",
+    "buy.btn_upload": "inbox",
+    "buy.btn_cancel": "cross",
+    "orders.btn_reveal": "check",
+    "orders.btn_back_orders": "package",
+    "help.btn_support": "megaphone",
+    "help.btn_main": "inbox"
+  },
+  "_button_style": {
+    "menu.btn_browse": "primary",
+    "menu.btn_wallet": "success",
+    "menu.btn_orders": "success",
+    "menu.btn_help": "danger",
+    "common.main_menu": "primary",
+    "common.back": "primary",
+    "common.cancel": "danger",
+    "browse.btn_prev": "primary",
+    "browse.btn_next": "success",
+    "browse.btn_page": "primary",
+    "orders.btn_prev": "primary",
+    "orders.btn_next": "success",
+    "country.btn_pay_upi": "primary",
+    "country.btn_wallet_buy": "success",
+    "country.btn_back_browse": "primary",
+    "wallet.btn_deposit": "success",
+    "wallet.btn_dep_hist": "primary",
+    "wallet.btn_back_wallet": "primary",
+    "buy.btn_reveal": "success",
+    "buy.btn_deposit": "success",
+    "buy.btn_upload": "primary",
+    "buy.btn_cancel": "danger",
+    "orders.btn_reveal": "success",
+    "orders.btn_back_orders": "primary",
+    "help.btn_support": "primary",
+    "help.btn_main": "success"
+  },
+  "_emoji": {
+    "sparkle": "6026162407066309019",
+    "star": "6123129707614441341",
+    "rocket": "5372917041193828849",
+    "wallet": "6025976946083500432",
+    "package": "5422725295889196694",
+    "lock": "5352797004902702721",
+    "check": "6122738552057894402",
+    "cross": "6325673446101488660",
+    "fire": "5352919308391424163",
+    "globe": "5287354223141357312",
+    "chart": "6032808241891644148",
+    "wrench": "6244381874240624709",
+    "megaphone": "5352712960982654265",
+    "inbox": "6244350267576293455"
+  },
+  "_emoji_char": {
+    "sparkle": "✨",
+    "star": "⭐",
+    "rocket": "🚀",
+    "wallet": "💰",
+    "package": "📦",
+    "lock": "🔒",
+    "check": "✅",
+    "cross": "❌",
+    "fire": "🔥",
+    "globe": "🌍",
+    "chart": "📊",
+    "wrench": "💥",
+    "megaphone": "📢",
+    "inbox": "⭐"
+  },
+  "access": {
+    "banned": "{{e:cross}} ᴀᴄᴄᴇꜱꜱ ᴅᴇɴɪᴇᴅ — ʏᴏᴜ ᴀʀᴇ ʙᴀɴɴᴇᴅ ꜰʀᴏᴍ ᴛʜɪꜱ ʙᴏᴛ.",
+    "maintenance": "{{e:wrench}} ᴍᴀɪɴᴛᴇɴᴀɴᴄᴇ — ᴛʀʏ ᴀɢᴀɪɴ ʟᴀᴛᴇʀ."
+  },
+  "update": {
+    "admin_only": "{{e:lock}} <b>ᴀᴅᴍɪɴꜱ ᴏɴʟʏ</b>\nᴛʜɪꜱ ᴄᴏᴍᴍᴀɴᴅ ɪꜱ ʀᴇꜱᴛʀɪᴄᴛᴇᴅ ᴛᴏ ʙᴏᴛ ᴀᴅᴍɪɴɪꜱᴛʀᴀᴛᴏʀꜱ.",
+    "checking": "{{e:inbox}} <b>ᴄʜᴇᴄᴋɪɴɢ ʀᴇᴘᴏꜱɪᴛᴏʀʏ…</b>\nꜰᴇᴛᴄʜɪɴɢ ʟᴀᴛᴇꜱᴛ ᴄᴏᴍᴍɪᴛ ꜰʀᴏᴍ ɢɪᴛʜᴜʙ.",
+    "github_unreachable": "{{e:cross}} <b>ɢɪᴛʜᴜʙ ᴜɴʀᴇᴀᴄʜᴀʙʟᴇ</b>\nᴄʜᴇᴄᴋ ʏᴏᴜʀ ɴᴇᴛᴡᴏʀᴋ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ.\n<code>{error}</code>",
+    "no_commit": "{{e:cross}} <b>ɴᴏ ᴄᴏᴍᴍɪᴛ ᴅᴀᴛᴀ</b>\nᴄᴏᴜʟᴅ ɴᴏᴛ ʀᴇᴀᴅ ᴛʜᴇ ʟᴀᴛᴇꜱᴛ ᴄᴏᴍᴍɪᴛ.",
+    "up_to_date": "{{e:check}} <b>ᴀʟʀᴇᴀᴅʏ ᴜᴘ ᴛᴏ ᴅᴀᴛᴇ</b>\nʏᴏᴜʀ ʙᴏᴛ ᴍᴀᴛᴄʜᴇꜱ ᴛʜᴇ ʟᴀᴛᴇꜱᴛ ᴄᴏᴍᴍɪᴛ.\n<code>{branch}</code> ▸ <code>{sha_short}</code>",
+    "pulling": "{{e:inbox}} <b>ᴜᴘᴅᴀᴛɪɴɢ…</b>\nɴᴇᴡ ᴄʜᴀɴɢᴇꜱ ꜰᴏᴜɴᴅ. ᴘᴜʟʟɪɴɢ ᴄᴏᴅᴇ ᴀɴᴅ ᴘʀᴇᴘᴀʀɪɴɢ ʀᴇꜱᴛᴀʀᴛ.",
+    "failed": "{{e:cross}} <b>ᴜᴘᴅᴀᴛᴇ ꜰᴀɪʟᴇᴅ</b>\n<code>{error}</code>",
+    "restarting": "{{e:rocket}} <b>ʀᴇꜱᴛᴀʀᴛɪɴɢ</b>\nᴜᴘᴅᴀᴛᴇ ᴀᴘᴘʟɪᴇᴅ. ᴛʜᴇ ʙᴏᴛ ɪꜱ ʀᴇꜱᴛᴀʀᴛɪɴɢ ɴᴏᴡ…",
+    "git_not_found": "{{e:cross}} <b>ɢɪᴛ ɴᴏᴛ ᴀᴠᴀɪʟᴀʙʟᴇ</b>\n<code>git</code> ᴍɪꜱꜱɪɴɢ ᴏʀ ɪɴᴠᴀʟɪᴅ ʀᴇᴘᴏ ᴘᴀᴛʜ."
+  },
+  "menu": {
+    "btn_browse": "⌜ʙʀᴏᴡꜱᴇ ɴᴜᴍʙᴇʀꜱ⌟",
+    "btn_wallet": "⌜ᴍʏ ᴡᴀʟʟᴇᴛ⌟",
+    "btn_orders": "⌜ᴍʏ ᴏʀᴅᴇʀꜱ⌟",
+    "btn_help": "⌜ʜᴇʟᴘ & ᴄᴏᴍᴍᴀɴᴅꜱ⌟"
+  },
+  "welcome": {
+    "default": "<b>{{e:sparkle}} ᴡᴇʟᴄᴏᴍᴇ {user_name}</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n<b>{{e:fire}} ᴘʀᴇᴍɪᴜᴍ ᴠᴇʀɪꜰɪᴇᴅ ɴᴜᴍʙᴇʀꜱ • ꜰᴀꜱᴛ ᴅᴇʟɪᴠᴇʀʏ</b>\n<b>{{e:check}} ꜱᴇᴄᴜʀᴇᴅ ᴄʜᴇᴄᴋᴏᴜᴛ</b>\n<b>{{e:star}} ᴄʟᴇᴀɴ ᴛʀᴜꜱᴛᴇᴅ ꜱᴛᴏᴄᴋ</b>\n<b>{{e:rocket}} ɪɴꜱᴛᴀɴᴛ ᴀᴄᴄᴇꜱꜱ ᴀꜰᴛᴇʀ ᴀᴘᴘʀᴏᴠᴀʟ</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n<b>ɢᴇᴛ ᴘʀᴇᴍɪᴜᴍ ǫᴜᴀʟɪᴛʏ ꜰʀᴏᴍ ꜱᴛᴀʀᴛ ᴛᴏ ᴅᴇʟɪᴠᴇʀʏ.</b>\n<b>ᴛᴀᴘ ᴀɴʏ ʙᴜᴛᴛᴏɴ ʙᴇʟᴏᴡ ᴛᴏ ᴄᴏɴᴛɪɴᴜᴇ.</b>"
+  },
+  "browse": {
+    "no_stock": "{{e:package}} <b>ɴᴏ ꜱᴛᴏᴄᴋ</b>\nɴᴏᴛʜɪɴɢ ᴀᴠᴀɪʟᴀʙʟᴇ ʀɪɢʜᴛ ɴᴏᴡ. ᴄʜᴇᴄᴋ ʙᴀᴄᴋ ʟᴀᴛᴇʀ.",
+    "oos_alert": "ᴏᴜᴛ ᴏꜰ ꜱᴛᴏᴄᴋ!",
+    "header": "🔵 <b>ᴀᴠᴀɪʟᴀʙʟᴇ ɴᴜᴍʙᴇʀꜱ</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>",
+    "country_block": "{flag} <b>{name}</b>\n   📦 ꜱᴛᴏᴄᴋ: <code>{stock}</code>  │  ₹<code>{price}</code>",
+    "footer": "<b>━━━━━━━━━━━━━━━━━━━━</b>\n<i>ᴘᴀɢᴇ {cur}/{pages} • ᴛᴀᴘ ᴀ ʙᴜᴛᴛᴏɴ ᴛᴏ ʙᴜʏ</i>",
+    "btn_prev": "◀️ ᴘʀᴇᴠ",
+    "btn_next": "ɴᴇxᴛ ▶️",
+    "btn_page": "ᴘᴀɢᴇ {cur}/{pages}"
+  },
+  "country": {
+    "not_found": "<b>ᴄᴏᴜɴᴛʀʏ ɴᴏᴛ ꜰᴏᴜɴᴅ</b>",
+    "oos": "{flag} <b>{name}</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n{{e:cross}} <b>ɴᴏ ꜱᴛᴏᴄᴋ</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>",
+    "detail": "{flag} <b>{name}</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n💠 <b>ᴘʀɪᴄᴇ</b>  ₹<code>{price}</code> ɪɴʀ\n📦 <b>ꜱᴛᴏᴄᴋ</b>  <code>{stock}</code> ᴀᴠᴀɪʟᴀʙʟᴇ\n<b>━━━━━━━━━━━━━━━━━━━━</b>",
+    "btn_pay_upi": "ᴘᴀʏ ᴡɪᴛʜ ᴜᴘɪ",
+    "btn_wallet_buy": "ᴡᴀʟʟᴇᴛ ʙᴜʏ  (ʙᴀʟ ₹{bal})",
+    "btn_back_browse": "🔙 ʙᴀᴄᴋ"
+  },
+  "wallet": {
+    "panel": "🟢 <b>ᴍʏ ᴡᴀʟʟᴇᴛ</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n💵 <b>ʙᴀʟᴀɴᴄᴇ</b>  ₹<code>{bal:.2f}</code> ɪɴʀ\n<b>━━━━━━━━━━━━━━━━━━━━</b>",
+    "deposit_prompt": "🔵 <b>ᴜᴘɪ ᴅᴇᴘᴏꜱɪᴛ</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\nᴇɴᴛᴇʀ ᴀᴍᴏᴜɴᴛ ɪɴ ɪɴʀ ᴛᴏ ᴅᴇᴘᴏꜱɪᴛ:\n<i>(ᴍɪɴɪᴍᴜᴍ ₹50)</i>",
+    "btn_deposit": "➕ ᴅᴇᴘᴏꜱɪᴛ ᴠɪᴀ ᴜᴘɪ",
+    "btn_dep_hist": "📋 ᴅᴇᴘᴏꜱɪᴛ ʜɪꜱᴛᴏʀʏ",
+    "btn_back_wallet": "🔙 ᴡᴀʟʟᴇᴛ",
+    "dep_empty": "📋 <b>ɴᴏ ᴅᴇᴘᴏꜱɪᴛꜱ ʏᴇᴛ</b>",
+    "dep_header": "📋 <b>ᴅᴇᴘᴏꜱɪᴛ ʜɪꜱᴛᴏʀʏ</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>"
+  },
+  "buy": {
+    "user_not_found": "<b>ᴜꜱᴇʀ ɴᴏᴛ ꜰᴏᴜɴᴅ</b>",
+    "low_balance": "{{e:cross}} <b>ɪɴꜱᴜꜰꜰɪᴄɪᴇɴᴛ ʙᴀʟᴀɴᴄᴇ</b>\nɴᴇᴇᴅ ₹<code>{need:.0f}</code>, ʏᴏᴜ ʜᴀᴠᴇ ₹<code>{have:.2f}</code>.",
+    "no_accounts": "{{e:cross}} <b>ɴᴏ ᴀᴄᴄᴏᴜɴᴛꜱ</b>\nɴᴏ ꜱᴛᴏᴄᴋ ʀɪɢʜᴛ ɴᴏᴡ.",
+    "success": "{{e:check}} <b>ᴘᴜʀᴄʜᴀꜱᴇᴅ</b>\nʏᴏᴜʀ ɴᴜᴍʙᴇʀ ɪꜱ ʀᴇᴀᴅʏ ʙᴇʟᴏᴡ.",
+    "btn_reveal": "📱 ʀᴇᴠᴇᴀʟ ᴍʏ ɴᴜᴍʙᴇʀ",
+    "btn_deposit": "➕ ᴀᴅᴅ ꜰᴜɴᴅꜱ",
+    "pay_caption": "<b>━━━━━━━━━━━━━━━━━━━━</b>\n🔵 <b>ᴜᴘɪ ᴘᴀʏᴍᴇɴᴛ</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n💰 ᴀᴍᴏᴜɴᴛ: ₹<code>{amount:.0f}</code>\n🏦 ᴜᴘɪ ɪᴅ: <code>{upi}</code>\n📱 ꜱᴄᴀɴ ᴡɪᴛʜ ᴀɴʏ ᴜᴘɪ ᴀᴘᴘ\n⚠️ ᴘᴀʏ ᴇxᴀᴄᴛ ᴀᴍᴏᴜɴᴛ ꜱʜᴏᴡɴ\n<b>━━━━━━━━━━━━━━━━━━━━</b>",
+    "upload_caption": "📸 ꜱᴇɴᴅ ʏᴏᴜʀ ᴘᴀʏᴍᴇɴᴛ ꜱᴄʀᴇᴇɴꜱʜᴏᴛ ᴀꜱ ᴀ ᴘʜᴏᴛᴏ.",
+    "session_expired": "{{e:cross}} ꜱᴇꜱꜱɪᴏɴ ᴇxᴘɪʀᴇᴅ. ꜱᴛᴀʀᴛ ᴀɢᴀɪɴ.",
+    "need_photo": "{{e:cross}} ᴘʟᴇᴀꜱᴇ ꜱᴇɴᴅ ᴀ ᴘʜᴏᴛᴏ.",
+    "submitted": "{{e:check}} ᴘᴀʏᴍᴇɴᴛ ꜱᴜʙᴍɪᴛᴛᴇᴅ! ᴜɴᴅᴇʀ ʀᴇᴠɪᴇᴡ.",
+    "dep_submitted": "{{e:check}} ᴅᴇᴘᴏꜱɪᴛ ꜱᴜʙᴍɪᴛᴛᴇᴅ! ᴜɴᴅᴇʀ ʀᴇᴠɪᴇᴡ.",
+    "btn_upload": "📸 ɪ'ᴠᴇ ᴘᴀɪᴅ — ᴜᴘʟᴏᴀᴅ ꜱᴄʀᴇᴇɴꜱʜᴏᴛ",
+    "btn_cancel": "❌ ᴄᴀɴᴄᴇʟ"
+  },
+  "orders": {
+    "none": "📦 <b>ɴᴏ ᴏʀᴅᴇʀꜱ ʏᴇᴛ</b>",
+    "header": "📦 <b>ᴍʏ ᴏʀᴅᴇʀꜱ</b>",
+    "not_found": "❌ <b>ᴏʀᴅᴇʀ ɴᴏᴛ ꜰᴏᴜɴᴅ</b>",
+    "not_approved": "❌ <b>ᴏʀᴅᴇʀ ᴜɴᴀᴠᴀɪʟᴀʙʟᴇ</b>\nɴᴏᴛ ꜰᴏᴜɴᴅ ᴏʀ ɴᴏᴛ ᴀᴘᴘʀᴏᴠᴇᴅ.",
+    "detail": "📦 <b>ᴏʀᴅᴇʀ #{oid}</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n🌍 {flag} <b>{cname}</b>\n💰 ₹<code>{amount:.0f}</code> ɪɴʀ\n💳 ᴜᴘɪ\n📊 {status_emoji} <b>{status}</b>\n📅 {created}\n<b>━━━━━━━━━━━━━━━━━━━━</b>",
+    "btn_reveal": "📱 ʀᴇᴠᴇᴀʟ ɴᴜᴍʙᴇʀ",
+    "btn_back_orders": "🔙 ᴍʏ ᴏʀᴅᴇʀꜱ",
+    "btn_prev": "◀️ ᴘʀᴇᴠ",
+    "btn_next": "ɴᴇxᴛ ▶️"
+  },
+  "help": {
+    "body": "<b>🔴 ʜᴇʟᴘ & ᴄᴏᴍᴍᴀɴᴅꜱ</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n<b>• ʙʀᴏᴡꜱᴇ ᴀᴠᴀɪʟᴀʙʟᴇ ᴄᴏᴜɴᴛʀɪᴇꜱ</b>\n<b>• ꜱᴇʟᴇᴄᴛ ᴀ ɴᴜᴍʙᴇʀ & ᴘᴀʏ ᴠɪᴀ ᴜᴘɪ</b>\n<b>• ᴜᴘʟᴏᴀᴅ ꜱᴄʀᴇᴇɴꜱʜᴏᴛ ꜰᴏʀ ᴀᴘᴘʀᴏᴠᴀʟ</b>\n<b>• ᴏʀ ᴜꜱᴇ ᴡᴀʟʟᴇᴛ ꜰᴏʀ ɪɴꜱᴛᴀɴᴛ ʙᴜʏ</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n<b>ɴᴇᴇᴅ ʜᴇʟᴘ? ᴏᴘᴇɴ ꜱᴜᴘᴘᴏʀᴛ ʙᴇʟᴏᴡ.</b>",
+    "btn_support": "💬 ꜱᴜᴘᴘᴏʀᴛ",
+    "btn_main": "🔙 ᴍᴀɪɴ ᴍᴇɴᴜ"
+  },
+  "common": {
+    "main_menu": "🔙 ᴍᴀɪɴ ᴍᴇɴᴜ",
+    "back": "🔙 ʙᴀᴄᴋ",
+    "cancel": "❌ ᴄᴀɴᴄᴇʟ"
+  },
+  "admin_cmd": {
+    "reply": "🔧 <b>ᴀᴅᴍɪɴ ᴘᴀɴᴇʟ</b>"
+  }
+}
