@@ -1,13 +1,15 @@
 import asyncio
 import io
+import json
 import logging
 import os
 import re
-import sqlite3
+import subprocess
 import sys
+import urllib.request
 from datetime import datetime, timezone, timedelta
 from html import escape
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 import qrcode
 from PIL import Image
@@ -29,19 +31,38 @@ from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, FloodWaitError
 sys.path = _ORIG_SYS_PATH
 
+from pymongo import ASCENDING, MongoClient, ReturnDocument
+from pymongo.errors import PyMongoError
+
+from i18n import (
+    apply_custom_emoji_html,
+    ibutton,
+    ibutton_raw,
+    sc,
+    t,
+    t_plain,
+    welcome_default_template,
+)
+
 # ─── CONFIG ─────────────────────────────────────────────────────────────────
-BOT_TOKEN = "8638333892:AAGNOYyLWE2KuQJF8gmCvVbkc-aP0tpVcBI"
+BOT_TOKEN = "8642856603:AAGXRxr7Te7zFYMjfsIpY2tHHBehAiBmsHo"
 ADMIN_IDS = [8746242371, 8333954027]
 ADMIN_GROUP_ID = -1003564044316
 # Successful buy logs will be sent here (set your channel/group id)
 LOG_GROUP_ID = -1003929185913
-STORE_BOT_USERNAME = "XR_OTP_BOT"
+STORE_BOT_USERNAME = "ID_SELLING_BOT"
 START_IMAGE_URL = "https://te.legra.ph/file/3e40a408286d4eda24191.jpg"
 API_ID    = 22091901
 API_HASH  = "54b0cd5fb47a40265b197f1a110b20b8"
 UPI_ID = "maurya.xq@fam"
-DB_PATH = "numberstore8.db"
+# Set MONGODB_URI in the environment to your Atlas connection string (do not commit secrets).
+MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb+srv://k05170492_db_user:xwiVDkW69VgeSSTE@cluster0.etkmxtd.mongodb.net/telegram_bot?retryWrites=true&w=majority").strip()
+GITHUB_REPO_OWNER = os.environ.get("GITHUB_REPO_OWNER", "jay1234-bot")
+GITHUB_REPO_NAME = os.environ.get("GITHUB_REPO_NAME", "denjisellbot")
+GITHUB_DEFAULT_BRANCH = os.environ.get("GITHUB_DEFAULT_BRANCH", "main")
 IST = timezone(timedelta(hours=5, minutes=30))
+
+_mongo_client: Optional[MongoClient] = None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -301,94 +322,77 @@ def lookup_dialing_code(raw: str):
             return DIALING_CODE_MAP[prefix]
     return None
 
-# ─── DATABASE ────────────────────────────────────────────────────────────────
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+# ─── DATABASE (MongoDB) ───────────────────────────────────────────────────────
+def get_mongo_client() -> MongoClient:
+    global _mongo_client
+    if not MONGODB_URI:
+        raise RuntimeError(
+            "MONGODB_URI is not set. Set the environment variable to your MongoDB connection string "
+            "(e.g. mongodb+srv://user:pass@cluster/telegram_bot?retryWrites=true&w=majority)."
+        )
+    if _mongo_client is None:
+        _mongo_client = MongoClient(MONGODB_URI)
+    return _mongo_client
+
+
+def get_mongo():
+    return get_mongo_client().get_default_database()
+
+
+def next_seq(counter_name: str) -> int:
+    doc = get_mongo().counters.find_one_and_update(
+        {"_id": counter_name},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    return int(doc["seq"])
+
 
 def init_db():
-    conn = get_db()
-    c = conn.cursor()
-    c.executescript("""
-    CREATE TABLE IF NOT EXISTS countries (
-        id INTEGER PRIMARY KEY,
-        code TEXT UNIQUE,
-        name TEXT,
-        flag TEXT,
-        price_inr REAL DEFAULT 0,
-        enabled INTEGER DEFAULT 1
-    );
-    CREATE TABLE IF NOT EXISTS accounts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        country_code TEXT,
-        phone_number TEXT,
-        session_string TEXT,
-        two_fa_password TEXT,
-        is_sold INTEGER DEFAULT 0,
-        sold_to INTEGER,
-        sold_at TIMESTAMP,
-        added_by INTEGER,
-        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS orders (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        username TEXT,
-        account_id INTEGER,
-        country_code TEXT,
-        amount_inr REAL,
-        payment_method TEXT DEFAULT 'upi',
-        payment_screenshot TEXT,
-        status TEXT DEFAULT 'pending',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        reviewed_by INTEGER,
-        reviewed_at TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY,
-        username TEXT,
-        first_name TEXT,
-        is_banned INTEGER DEFAULT 0,
-        total_purchases INTEGER DEFAULT 0,
-        wallet_balance REAL DEFAULT 0,
-        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS deposits (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        amount_inr REAL,
-        payment_method TEXT DEFAULT 'upi',
-        screenshot TEXT,
-        status TEXT DEFAULT 'pending',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        reviewed_by INTEGER,
-        reviewed_at TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT
-    );
-    """)
-    c.execute("INSERT OR IGNORE INTO settings VALUES ('maintenance','0')")
-    new_welcome = get_default_welcome_template()
-    c.execute("INSERT OR IGNORE INTO settings VALUES ('welcome_message',?)", (new_welcome,))
-    # One-time migration: replace old default welcome with new styled welcome.
-    row = c.execute("SELECT value FROM settings WHERE key='welcome_message'").fetchone()
+    db = get_mongo()
+    db.countries.create_index("code", unique=True)
+    db.users.create_index("id", unique=True)
+    db.accounts.create_index([("country_code", ASCENDING), ("is_sold", ASCENDING)])
+    db.orders.create_index("user_id")
+    db.orders.create_index("status")
+    db.deposits.create_index("user_id")
+    db.deposits.create_index("status")
+
+    if db.countries.estimated_document_count() == 0:
+        for i, (code, name, flag) in enumerate(COUNTRIES, 1):
+            db.countries.insert_one(
+                {
+                    "_id": code,
+                    "id": i,
+                    "code": code,
+                    "name": name,
+                    "flag": flag,
+                    "price_inr": 0.0,
+                    "enabled": 1,
+                }
+            )
+
+    db.settings.update_one({"_id": "maintenance"}, {"$setOnInsert": {"value": "0"}}, upsert=True)
+    new_welcome = welcome_default_template()
+    db.settings.update_one(
+        {"_id": "welcome_message"},
+        {"$setOnInsert": {"value": new_welcome}},
+        upsert=True,
+    )
+    wm = db.settings.find_one({"_id": "welcome_message"})
     old_defaults = {
         "🏪 Welcome to NumberStore!\nBuy verified phone numbers instantly.\nFast • Secure • 24/7",
         "🏪 Welcome to NumberStore!",
     }
-    if row and row["value"] in old_defaults:
-        c.execute("UPDATE settings SET value=? WHERE key='welcome_message'", (new_welcome,))
-    for i, (code, name, flag) in enumerate(COUNTRIES, 1):
-        c.execute("INSERT OR IGNORE INTO countries (id,code,name,flag) VALUES (?,?,?,?)", (i, code, name, flag))
-    conn.commit()
-    conn.close()
+    if wm and wm.get("value") in old_defaults:
+        db.settings.update_one({"_id": "welcome_message"}, {"$set": {"value": new_welcome}})
+
 
 # ─── HELPERS ─────────────────────────────────────────────────────────────────
 def now_ist():
     return datetime.now(IST)
+
 
 def fmt_time(ts_str):
     if not ts_str:
@@ -401,92 +405,632 @@ def fmt_time(ts_str):
     except Exception:
         return str(ts_str)
 
+
 def get_setting(key, default=""):
-    conn = get_db()
-    row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-    conn.close()
-    return row["value"] if row else default
+    doc = get_mongo().settings.find_one({"_id": key})
+    return doc["value"] if doc and "value" in doc else default
+
 
 def set_setting(key, value):
-    conn = get_db()
-    conn.execute("INSERT OR REPLACE INTO settings VALUES (?,?)", (key, str(value)))
-    conn.commit()
-    conn.close()
+    get_mongo().settings.update_one(
+        {"_id": key},
+        {"$set": {"value": str(value)}},
+        upsert=True,
+    )
+
 
 def register_user(user):
-    conn = get_db()
-    conn.execute(
-        "INSERT OR IGNORE INTO users (id, username, first_name, joined_at) VALUES (?,?,?,?)",
-        (user.id, user.username or "", user.first_name or "", now_ist().isoformat())
+    db = get_mongo()
+    now = now_ist().isoformat()
+    db.users.update_one(
+        {"id": user.id},
+        {
+            "$set": {"username": user.username or "", "first_name": user.first_name or ""},
+            "$setOnInsert": {
+                "id": user.id,
+                "is_banned": 0,
+                "total_purchases": 0,
+                "wallet_balance": 0.0,
+                "joined_at": now,
+            },
+        },
+        upsert=True,
     )
-    conn.execute(
-        "UPDATE users SET username=?, first_name=? WHERE id=?",
-        (user.username or "", user.first_name or "", user.id)
-    )
-    conn.commit()
-    conn.close()
+
 
 def is_banned(user_id):
-    conn = get_db()
-    row = conn.execute("SELECT is_banned FROM users WHERE id=?", (user_id,)).fetchone()
-    conn.close()
-    return row and row["is_banned"] == 1
+    doc = get_mongo().users.find_one({"id": user_id})
+    return bool(doc and doc.get("is_banned") == 1)
+
 
 def is_maintenance():
     return get_setting("maintenance", "0") == "1"
 
+
 def is_admin(user_id):
     return user_id in ADMIN_IDS
 
+
 def check_access(user_id):
     if is_banned(user_id):
-        return "🚫 You are banned from using this bot."
+        return t_plain("access.banned")
     if is_maintenance() and not is_admin(user_id):
-        return "🔧 Bot is under maintenance. Please try again later."
+        return t_plain("access.maintenance")
     return None
 
+
 def get_country(code):
-    conn = get_db()
-    row = conn.execute("SELECT * FROM countries WHERE code=?", (code,)).fetchone()
-    conn.close()
-    return dict(row) if row else None
+    doc = get_mongo().countries.find_one({"code": code})
+    return dict(doc) if doc else None
+
 
 def get_stock_count(code):
-    conn = get_db()
-    row = conn.execute(
-        "SELECT COUNT(*) as cnt FROM accounts WHERE country_code=? AND is_sold=0", (code,)
-    ).fetchone()
-    conn.close()
-    return row["cnt"] if row else 0
+    return get_mongo().accounts.count_documents({"country_code": code, "is_sold": 0})
+
+
+def list_browse_countries() -> List[Dict[str, Any]]:
+    db = get_mongo()
+    out = []
+    for c in db.countries.find({"enabled": 1}).sort("name", ASCENDING):
+        stock = db.accounts.count_documents({"country_code": c["code"], "is_sold": 0})
+        if stock > 0:
+            row = dict(c)
+            row["stock_count"] = stock
+            out.append(row)
+    return out
+
+
+def ensure_country_row(code: str, name: str, flag: str) -> Dict[str, Any]:
+    db = get_mongo()
+    existing = db.countries.find_one({"code": code})
+    if existing:
+        return dict(existing)
+    max_doc = db.countries.find_one(sort=[("id", -1)])
+    next_id = (max_doc["id"] if max_doc and max_doc.get("id") is not None else 0) + 1
+    doc = {
+        "_id": code,
+        "id": next_id,
+        "code": code,
+        "name": name,
+        "flag": flag,
+        "price_inr": 0.0,
+        "enabled": 1,
+    }
+    db.countries.insert_one(doc)
+    return dict(doc)
+
+
+def count_accounts_for_country(code: str) -> int:
+    return get_mongo().accounts.count_documents({"country_code": code})
+
+
+def insert_account(
+    country_code: str,
+    phone_number: str,
+    session_string: str,
+    two_fa_password: Optional[str],
+    added_by: int,
+    added_at: str,
+) -> int:
+    db = get_mongo()
+    aid = next_seq("accounts")
+    db.accounts.insert_one(
+        {
+            "_id": aid,
+            "id": aid,
+            "country_code": country_code,
+            "phone_number": phone_number,
+            "session_string": session_string,
+            "two_fa_password": two_fa_password,
+            "is_sold": 0,
+            "sold_to": None,
+            "sold_at": None,
+            "added_by": added_by,
+            "added_at": added_at,
+        }
+    )
+    return aid
+
+
+def delete_account_by_id(acc_id: int) -> None:
+    get_mongo().accounts.delete_one({"_id": acc_id})
+
+
+def find_account_by_phone_or_id(query_val: str) -> Optional[Dict[str, Any]]:
+    db = get_mongo()
+    if query_val.startswith("+"):
+        doc = db.accounts.find_one({"phone_number": query_val.lstrip("+")})
+        return dict(doc) if doc else None
+    try:
+        doc = db.accounts.find_one({"_id": int(query_val)})
+    except ValueError:
+        return None
+    return dict(doc) if doc else None
+
+
+def get_user_row(user_id: int) -> Optional[Dict[str, Any]]:
+    doc = get_mongo().users.find_one({"id": user_id})
+    return dict(doc) if doc else None
+
+
+def get_wallet_balance(user_id: int) -> float:
+    row = get_user_row(user_id)
+    return float(row["wallet_balance"]) if row else 0.0
+
+
+def wallet_buy_transaction(user_id: int, username: str, code: str, price: float) -> Optional[int]:
+    """
+    Atomically sell one account and debit wallet. Returns new order_id or None if failed.
+    """
+    db = get_mongo()
+    client = get_mongo_client()
+    now = now_ist().isoformat()
+    try:
+        with client.start_session() as session:
+            with session.start_transaction():
+                acc = db.accounts.find_one_and_update(
+                    {"country_code": code, "is_sold": 0},
+                    {"$set": {"is_sold": 1, "sold_to": user_id, "sold_at": now}},
+                    sort=[("_id", ASCENDING)],
+                    return_document=ReturnDocument.BEFORE,
+                    session=session,
+                )
+                if not acc:
+                    return None
+                res = db.users.update_one(
+                    {"id": user_id, "wallet_balance": {"$gte": price}},
+                    {"$inc": {"wallet_balance": -price, "total_purchases": 1}},
+                    session=session,
+                )
+                if res.modified_count != 1:
+                    raise RuntimeError("wallet")
+                oid = next_seq("orders")
+                db.orders.insert_one(
+                    {
+                        "_id": oid,
+                        "id": oid,
+                        "user_id": user_id,
+                        "username": username or "",
+                        "account_id": acc["_id"],
+                        "country_code": code,
+                        "amount_inr": price,
+                        "payment_method": "wallet",
+                        "payment_screenshot": None,
+                        "status": "approved",
+                        "created_at": now,
+                        "reviewed_by": None,
+                        "reviewed_at": now,
+                    },
+                    session=session,
+                )
+                return oid
+    except PyMongoError:
+        logger.exception("wallet_buy_transaction")
+        return None
+    except RuntimeError:
+        return None
+
+
+def insert_pending_order(
+    user_id: int,
+    username: str,
+    code: str,
+    amount_inr: float,
+    file_id: str,
+    created_at: str,
+) -> int:
+    db = get_mongo()
+    oid = next_seq("orders")
+    db.orders.insert_one(
+        {
+            "_id": oid,
+            "id": oid,
+            "user_id": user_id,
+            "username": username or "",
+            "account_id": None,
+            "country_code": code,
+            "amount_inr": amount_inr,
+            "payment_method": "upi",
+            "payment_screenshot": file_id,
+            "status": "pending",
+            "created_at": created_at,
+            "reviewed_by": None,
+            "reviewed_at": None,
+        }
+    )
+    return oid
+
+
+def insert_pending_deposit(user_id: int, amount_inr: float, file_id: str, created_at: str) -> int:
+    db = get_mongo()
+    did = next_seq("deposits")
+    db.deposits.insert_one(
+        {
+            "_id": did,
+            "id": did,
+            "user_id": user_id,
+            "amount_inr": amount_inr,
+            "payment_method": "upi",
+            "screenshot": file_id,
+            "status": "pending",
+            "created_at": created_at,
+            "reviewed_by": None,
+            "reviewed_at": None,
+        }
+    )
+    return did
+
+
+def get_order_for_user(order_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+    doc = get_mongo().orders.find_one({"_id": order_id, "user_id": user_id})
+    return dict(doc) if doc else None
+
+
+def get_order_by_id(order_id: int) -> Optional[Dict[str, Any]]:
+    doc = get_mongo().orders.find_one({"_id": order_id})
+    return dict(doc) if doc else None
+
+
+def get_account_by_id(acc_id: int) -> Optional[Dict[str, Any]]:
+    doc = get_mongo().accounts.find_one({"_id": acc_id})
+    return dict(doc) if doc else None
+
+
+def order_id_for_account(acc_id: int) -> int:
+    doc = get_mongo().orders.find_one({"account_id": acc_id, "status": "approved"})
+    return int(doc["_id"]) if doc else 0
+
+
+def orders_for_user(user_id: int) -> List[Dict[str, Any]]:
+    db = get_mongo()
+    cur = db.orders.find({"user_id": user_id}).sort("created_at", -1)
+    rows = []
+    for o in cur:
+        d = dict(o)
+        ch = get_country(d.get("country_code") or "")
+        d["flag"] = ch["flag"] if ch else None
+        d["cname"] = ch["name"] if ch else None
+        rows.append(d)
+    return rows
+
+
+def deposits_for_user(user_id: int) -> List[Dict[str, Any]]:
+    return [dict(x) for x in get_mongo().deposits.find({"user_id": user_id}).sort("created_at", -1)]
+
+
+def approve_order_transaction(order_id: int, reviewer_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Returns dict with keys: order, acc, country_code or None.
+    """
+    db = get_mongo()
+    client = get_mongo_client()
+    now = now_ist().isoformat()
+    try:
+        with client.start_session() as session:
+            with session.start_transaction():
+                order = db.orders.find_one({"_id": order_id, "status": "pending"}, session=session)
+                if not order:
+                    return None
+                code = order["country_code"]
+                acc = db.accounts.find_one_and_update(
+                    {"country_code": code, "is_sold": 0},
+                    {"$set": {"is_sold": 1, "sold_to": order["user_id"], "sold_at": now}},
+                    sort=[("_id", ASCENDING)],
+                    return_document=ReturnDocument.BEFORE,
+                    session=session,
+                )
+                if not acc:
+                    raise RuntimeError("no_stock")
+                db.orders.update_one(
+                    {"_id": order_id},
+                    {
+                        "$set": {
+                            "status": "approved",
+                            "account_id": acc["_id"],
+                            "reviewed_by": reviewer_id,
+                            "reviewed_at": now,
+                        }
+                    },
+                    session=session,
+                )
+                db.users.update_one(
+                    {"id": order["user_id"]},
+                    {"$inc": {"total_purchases": 1}},
+                    session=session,
+                )
+                return {"order": dict(order), "acc": dict(acc), "country_code": code}
+    except PyMongoError:
+        logger.exception("approve_order_transaction")
+        return None
+    except RuntimeError:
+        return None
+
+
+def reject_order_db(order_id: int, reviewer_id: int) -> Optional[Dict[str, Any]]:
+    db = get_mongo()
+    now = now_ist().isoformat()
+    order = db.orders.find_one({"_id": order_id, "status": "pending"})
+    if not order:
+        return None
+    db.orders.update_one(
+        {"_id": order_id},
+        {"$set": {"status": "rejected", "reviewed_by": reviewer_id, "reviewed_at": now}},
+    )
+    return dict(order)
+
+
+def get_deposit_by_id(dep_id: int) -> Optional[Dict[str, Any]]:
+    doc = get_mongo().deposits.find_one({"_id": dep_id})
+    return dict(doc) if doc else None
+
+
+def approve_deposit_db(dep_id: int, reviewer_id: int) -> Optional[Dict[str, Any]]:
+    db = get_mongo()
+    now = now_ist().isoformat()
+    dep = db.deposits.find_one({"_id": dep_id, "status": "pending"})
+    if not dep:
+        return None
+    db.deposits.update_one(
+        {"_id": dep_id},
+        {"$set": {"status": "approved", "reviewed_by": reviewer_id, "reviewed_at": now}},
+    )
+    db.users.update_one({"id": dep["user_id"]}, {"$inc": {"wallet_balance": dep["amount_inr"]}})
+    return dict(dep)
+
+
+def reject_deposit_db(dep_id: int, reviewer_id: int) -> Optional[Dict[str, Any]]:
+    db = get_mongo()
+    now = now_ist().isoformat()
+    dep = db.deposits.find_one({"_id": dep_id, "status": "pending"})
+    if not dep:
+        return None
+    db.deposits.update_one(
+        {"_id": dep_id},
+        {"$set": {"status": "rejected", "reviewed_by": reviewer_id, "reviewed_at": now}},
+    )
+    return dict(dep)
+
+
+def list_countries_sorted() -> List[Dict[str, Any]]:
+    return [dict(c) for c in get_mongo().countries.find().sort("name", ASCENDING)]
+
+
+def set_country_price(code: str, price_inr: float) -> None:
+    get_mongo().countries.update_one({"code": code}, {"$set": {"price_inr": price_inr}})
+
+
+def toggle_country_enabled(code: str) -> None:
+    db = get_mongo()
+    row = db.countries.find_one({"code": code})
+    if not row:
+        return
+    new_val = 0 if row.get("enabled") else 1
+    db.countries.update_one({"code": code}, {"$set": {"enabled": new_val}})
+
+
+def orders_admin_list(status_filter: str) -> List[Dict[str, Any]]:
+    db = get_mongo()
+    q: Dict[str, Any] = {}
+    if status_filter != "all":
+        q["status"] = status_filter
+    cur = db.orders.find(q).sort("created_at", -1)
+    rows = []
+    for o in cur:
+        d = dict(o)
+        ch = get_country(d.get("country_code") or "")
+        d["flag"] = ch["flag"] if ch else None
+        d["cname"] = ch["name"] if ch else None
+        rows.append(d)
+    return rows
+
+
+def ban_user(uid: int) -> None:
+    get_mongo().users.update_one({"id": uid}, {"$set": {"is_banned": 1}})
+
+
+def unban_user(uid: int) -> None:
+    get_mongo().users.update_one({"id": uid}, {"$set": {"is_banned": 0}})
+
+
+def adjust_wallet(uid: int, delta: float) -> float:
+    db = get_mongo()
+    db.users.update_one({"id": uid}, {"$inc": {"wallet_balance": delta}})
+    row = db.users.find_one({"id": uid})
+    return float(row["wallet_balance"]) if row else 0.0
+
+
+def deposits_admin_list(status_filter: str) -> List[Dict[str, Any]]:
+    db = get_mongo()
+    q: Dict[str, Any] = {}
+    if status_filter != "all":
+        q["status"] = status_filter
+    return [dict(x) for x in db.deposits.find(q).sort("created_at", -1)]
+
+
+def admin_stats_row() -> Dict[str, Any]:
+    db = get_mongo()
+    total_users = db.users.count_documents({})
+    total_stock = db.accounts.count_documents({})
+    avail_stock = db.accounts.count_documents({"is_sold": 0})
+    sold = db.accounts.count_documents({"is_sold": 1})
+    agg = list(db.orders.aggregate([{"$match": {"status": "approved"}}, {"$group": {"_id": None, "s": {"$sum": "$amount_inr"}}}]))
+    revenue = float(agg[0]["s"]) if agg else 0.0
+    pending_orders = db.orders.count_documents({"status": "pending"})
+    pending_deps = db.deposits.count_documents({"status": "pending"})
+    banned = db.users.count_documents({"is_banned": 1})
+    return {
+        "total_users": total_users,
+        "total_stock": total_stock,
+        "avail_stock": avail_stock,
+        "sold": sold,
+        "revenue": revenue,
+        "pending_orders": pending_orders,
+        "pending_deps": pending_deps,
+        "banned": banned,
+    }
+
+
+def broadcast_recipient_ids() -> List[int]:
+    return [d["id"] for d in get_mongo().users.find({"is_banned": {"$ne": 1}}, {"id": 1})]
+
+
+def count_active_users() -> int:
+    return get_mongo().users.count_documents({"is_banned": {"$ne": 1}})
+
+
+def find_user_by_id_or_username(query_val: str) -> Optional[Dict[str, Any]]:
+    db = get_mongo()
+    try:
+        uid = int(query_val)
+        doc = db.users.find_one({"id": uid})
+    except ValueError:
+        doc = db.users.find_one({"username": query_val})
+    return dict(doc) if doc else None
+
+
+def _github_api_url() -> str:
+    return (
+        f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/"
+        f"commits/{GITHUB_DEFAULT_BRANCH}"
+    )
+
+
+def _github_raw_bot_url() -> str:
+    return (
+        f"https://raw.githubusercontent.com/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/"
+        f"{GITHUB_DEFAULT_BRANCH}/bot.py"
+    )
+
+
+def fetch_github_latest_sha() -> str:
+    req = urllib.request.Request(_github_api_url(), headers={"User-Agent": "NumberStoreBot/1.0"})
+    with urllib.request.urlopen(req, timeout=45) as resp:
+        data = json.loads(resp.read().decode())
+    return str(data.get("sha") or "")
+
+
+async def _async_git_pull_and_head() -> str:
+    proc = await asyncio.create_subprocess_exec(
+        "git", "-C", _SCRIPT_DIR, "pull", "--ff-only",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        err = (stderr or stdout or b"").decode("utf-8", errors="replace").strip()
+        raise RuntimeError(err or "git pull failed")
+    proc2 = await asyncio.create_subprocess_exec(
+        "git", "-C", _SCRIPT_DIR, "rev-parse", "HEAD",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    out2, err2 = await proc2.communicate()
+    if proc2.returncode != 0:
+        raise RuntimeError((err2 or b"").decode("utf-8", errors="replace").strip() or "git rev-parse failed")
+    return out2.decode("utf-8", errors="replace").strip()
+
+
+def local_deployed_sha() -> str:
+    git_dir = os.path.join(_SCRIPT_DIR, ".git")
+    if os.path.isdir(git_dir):
+        try:
+            out = subprocess.run(
+                ["git", "-C", _SCRIPT_DIR, "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=True,
+            )
+            return out.stdout.strip()
+        except Exception:
+            pass
+    return get_setting("deployed_bot_sha", "")
+
+
+def download_bot_py_from_github() -> None:
+    req = urllib.request.Request(_github_raw_bot_url(), headers={"User-Agent": "NumberStoreBot/1.0"})
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = resp.read()
+    path = os.path.join(_SCRIPT_DIR, "bot.py")
+    with open(path, "wb") as f:
+        f.write(data)
+
+
+async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text(t("update.admin_only"), parse_mode="HTML")
+        return
+    status = await update.message.reply_text(t("update.checking"), parse_mode="HTML")
+    try:
+        remote_sha = await asyncio.to_thread(fetch_github_latest_sha)
+    except Exception as e:
+        logger.error("GitHub API error: %s", e)
+        await status.edit_text(
+            t("update.github_unreachable", error=escape(str(e))),
+            parse_mode="HTML",
+        )
+        return
+    if not remote_sha:
+        await status.edit_text(t("update.no_commit"), parse_mode="HTML")
+        return
+    local_sha = local_deployed_sha()
+    if local_sha and local_sha == remote_sha:
+        await status.edit_text(
+            t(
+                "update.up_to_date",
+                branch=escape(GITHUB_DEFAULT_BRANCH),
+                sha_short=escape(remote_sha[:7]),
+            ),
+            parse_mode="HTML",
+        )
+        return
+    await status.edit_text(t("update.pulling"), parse_mode="HTML")
+    try:
+        git_dir = os.path.join(_SCRIPT_DIR, ".git")
+        if os.path.isdir(git_dir):
+            new_sha = await _async_git_pull_and_head()
+        else:
+            await asyncio.to_thread(download_bot_py_from_github)
+            new_sha = remote_sha
+        set_setting("deployed_bot_sha", new_sha)
+    except FileNotFoundError as e:
+        logger.exception("Bot update failed (git missing?)")
+        await status.edit_text(
+            t("update.git_not_found") + f"\n<code>{escape(str(e))}</code>",
+            parse_mode="HTML",
+        )
+        return
+    except Exception as e:
+        logger.exception("Bot update failed")
+        await status.edit_text(
+            t("update.failed", error=escape(str(e))),
+            parse_mode="HTML",
+        )
+        return
+    await status.edit_text(t("update.restarting"), parse_mode="HTML")
+    await asyncio.sleep(0.6)
+    script = os.path.abspath(__file__)
+    os.execv(sys.executable, [sys.executable, script, *sys.argv[1:]])
 
 def main_menu_kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌍 ʙʀᴏᴡsᴇ ɴᴜᴍʙᴇʀs", callback_data="browse_0"),
-         InlineKeyboardButton("💰 ᴍʏ ᴡᴀʟʟᴇᴛ", callback_data="wallet")],
-        [InlineKeyboardButton("📦 ᴍʏ ᴏʀᴅᴇʀs", callback_data="my_orders_0"),
-         InlineKeyboardButton("❓ ʜᴇʟᴘ", callback_data="help")],
-    ])
-
-def get_default_welcome_template():
-    return (
-        "<b>ᴡᴇʟᴄᴏᴍᴇ {user_name}</b>\n"
-        "<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
-        "<b>✦ ᴘʀᴇᴍɪᴜᴍ ᴠᴇʀɪꜰɪᴇᴅ ɴᴜᴍʙᴇʀs ᴡɪᴛʜ ꜰᴀsᴛ ᴅᴇʟɪᴠᴇʀʏ</b>\n"
-        "<b>✦ ꜱᴇᴄᴜʀᴇᴅ ɪᴅ ᴄʜᴇᴄᴋᴏᴜᴛ</b>\n"
-        "<b>✦ ɴᴏ ᴘʜɪꜱʜɪɴɢ ᴀᴄᴄᴏᴜɴᴛꜱ</b>\n"
-        "<b>✦ ᴄʟᴇᴀɴ ᴀɴᴅ ᴛʀᴜꜱᴛᴇᴅ ꜱᴛᴏᴄᴋ</b>\n"
-        "<b>✦ ɪɴꜱᴛᴀɴᴛ ᴀᴄᴄᴇꜱꜱ ᴀꜰᴛᴇʀ ᴀᴘᴘʀᴏᴠᴀʟ</b>\n"
-        "<b>✦ ꜰᴀꜱᴛ ꜱᴜᴘᴘᴏʀᴛ ᴡʜᴇɴ ʏᴏᴜ ɴᴇᴇᴅ ʜᴇʟᴘ</b>\n"
-        "<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
-        "<b>ɢᴇᴛ ᴘʀᴇᴍɪᴜᴍ ǫᴜᴀʟɪᴛʏ, ꜱᴍᴏᴏᴛʜ ʙᴜʏɪɴɢ, ᴀɴᴅ ᴀ ᴄʟᴇᴀɴ ᴇxᴘᴇʀɪᴇɴᴄᴇ ꜰʀᴏᴍ ꜱᴛᴀʀᴛ ᴛᴏ ᴅᴇʟɪᴠᴇʀʏ.</b>\n"
-        "<b>ᴛᴀᴘ ᴀɴʏ ʙᴜᴛᴛᴏɴ ʙᴇʟᴏᴡ ᴛᴏ ᴄᴏɴᴛɪɴᴜᴇ.</b>"
+    return InlineKeyboardMarkup(
+        [
+            [ibutton("menu.btn_browse", callback_data="browse_0")],
+            [
+                ibutton("menu.btn_wallet", callback_data="wallet"),
+                ibutton("menu.btn_orders", callback_data="my_orders_0"),
+            ],
+            [ibutton("menu.btn_help", callback_data="help")],
+        ]
     )
+
 
 def render_welcome_message(user):
     full_name = " ".join(x for x in [getattr(user, "first_name", ""), getattr(user, "last_name", "")] if x) or "User"
-    template = get_setting("welcome_message", get_default_welcome_template())
+    template = get_setting("welcome_message", welcome_default_template())
     safe_name = escape(full_name)
-    return template.replace("{user_name}", safe_name)
+    raw = template.replace("{user_name}", safe_name)
+    return apply_custom_emoji_html(raw)
 
 async def safe_edit_callback_message(query, *, text: str, parse_mode: str, reply_markup=None):
     """
@@ -608,26 +1152,17 @@ async def browse_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     page = int(query.data.split("_")[1])
-    conn = get_db()
-    countries = conn.execute("""
-        SELECT c.*,
-               (SELECT COUNT(*) FROM accounts a WHERE a.country_code=c.code AND a.is_sold=0) as stock_count
-        FROM countries c
-        WHERE c.enabled=1
-        ORDER BY c.name
-    """).fetchall()
-    countries = [c for c in countries if c["stock_count"] > 0]
-    conn.close()
+    countries = list_browse_countries()
 
     per_page = 5
     total = len(countries)
 
     if total == 0:
-        buttons = [[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]]
+        buttons = [[ibutton("common.main_menu", callback_data="main_menu")]]
         await safe_edit_callback_message(
             query,
-            text="📦 *No stock available at the moment. Please check back later!*",
-            parse_mode="Markdown",
+            text=t("browse.no_stock"),
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(buttons),
         )
         return
@@ -637,43 +1172,65 @@ async def browse_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     start_i = page * per_page
     chunk = countries[start_i:start_i + per_page]
 
-    text_lines = ["🌍 *Available Numbers*\n━━━━━━━━━━━━━━━━━━━━"]
-    buttons = []
-
+    parts = [t("browse.header")]
     for c in chunk:
         stock = c["stock_count"]
         price_inr = c["price_inr"] or 0
-        text_lines.append(
-            f"{c['flag']} *{c['name']}*\n"
-            f"   📦 Stock: {stock}  |  ₹{price_inr:.0f}"
+        parts.append(
+            t(
+                "browse.country_block",
+                flag=c["flag"],
+                name=escape(c["name"]),
+                stock=stock,
+                price=f"{price_inr:.0f}",
+            )
         )
-        label = f"{c['flag']} {c['name']}  •  📦{stock}  •  ₹{price_inr:.0f}"
-        buttons.append([InlineKeyboardButton(label, callback_data=f"country_{c['code']}")])
+    parts.append(t("browse.footer", cur=page + 1, pages=pages))
+    full_text = "\n".join(parts)
 
-    text_lines.append("━━━━━━━━━━━━━━━━━━━━")
-    text_lines.append(f"_Page {page+1}/{pages}  •  Tap a button to buy_")
-    full_text = "\n".join(text_lines)
+    buttons = []
+    for c in chunk:
+        stock = c["stock_count"]
+        price_inr = c["price_inr"] or 0
+        label = f"{c['flag']} {c['name']} • 📦{stock} • ₹{price_inr:.0f}"
+        buttons.append(
+            [
+                ibutton_raw(
+                    label,
+                    callback_data=f"country_{c['code']}",
+                    icon_slot="globe",
+                    style="success",
+                )
+            ]
+        )
 
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"browse_{page-1}"))
-        nav.append(InlineKeyboardButton(f"Page {page+1}/{pages}", callback_data="noop"))
+        nav.append(ibutton("browse.btn_prev", callback_data=f"browse_{page-1}"))
+        nav.append(
+            ibutton(
+                "browse.btn_page",
+                callback_data="noop",
+                cur=page + 1,
+                pages=pages,
+            )
+        )
     if page < pages - 1:
-        nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"browse_{page+1}"))
+        nav.append(ibutton("browse.btn_next", callback_data=f"browse_{page+1}"))
 
     if nav:
         buttons.append(nav)
-    buttons.append([InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")])
+    buttons.append([ibutton("common.main_menu", callback_data="main_menu")])
 
     await safe_edit_callback_message(
         query,
         text=full_text,
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(buttons),
     )
 
 async def oos_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer("❌ Out of stock!", show_alert=True)
+    await update.callback_query.answer(t_plain("browse.oos_alert"), show_alert=True)
 
 async def noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
@@ -689,7 +1246,7 @@ async def country_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not c:
         await safe_edit_callback_message(
             query,
-            text="Country not found.",
+            text=t("country.not_found"),
             parse_mode="HTML",
             reply_markup=None,
         )
@@ -698,42 +1255,42 @@ async def country_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if stock == 0:
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Back", callback_data="browse_0")],
+            [ibutton("country.btn_back_browse", callback_data="browse_0")],
         ])
         await safe_edit_callback_message(
             query,
-            text=(
-                f"{c['flag']} *{c['name']}*\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"❌ *No stock available at the moment*\n"
-                f"━━━━━━━━━━━━━━━━━━━━"
-            ),
-            parse_mode="Markdown",
+            text=t("country.oos", flag=c["flag"], name=escape(c["name"])),
+            parse_mode="HTML",
             reply_markup=kb,
         )
         return
 
-    conn = get_db()
-    user_row = conn.execute("SELECT wallet_balance FROM users WHERE id=?", (query.from_user.id,)).fetchone()
-    conn.close()
-    wallet = user_row["wallet_balance"] if user_row else 0
+    wallet = get_wallet_balance(query.from_user.id)
 
-    text = (
-        f"{c['flag']} *{c['name']}*\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"₹  Price:   ₹{c['price_inr']:.0f} INR\n"
-        f"📦 Stock:   {stock} available\n"
-        f"━━━━━━━━━━━━━━━━━━━━"
+    text = t(
+        "country.detail",
+        flag=c["flag"],
+        name=escape(c["name"]),
+        price=f"{c['price_inr']:.0f}",
+        stock=stock,
     )
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("💳 Buy with UPI", callback_data=f"pay_method_{code}")],
-        [InlineKeyboardButton(f"💰 Buy from Wallet  (Bal: ₹{wallet:.2f})", callback_data=f"wallet_buy_{code}")],
-        [InlineKeyboardButton("🔙 Back", callback_data="browse_0")],
-    ])
+    kb = InlineKeyboardMarkup(
+        [
+            [ibutton("country.btn_pay_upi", callback_data=f"pay_method_{code}")],
+            [
+                ibutton(
+                    "country.btn_wallet_buy",
+                    callback_data=f"wallet_buy_{code}",
+                    bal=f"{wallet:.2f}",
+                )
+            ],
+            [ibutton("country.btn_back_browse", callback_data="browse_0")],
+        ]
+    )
     await safe_edit_callback_message(
         query,
         text=text,
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=kb,
     )
 
@@ -746,58 +1303,54 @@ async def wallet_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = query.data.split("_", 2)[2]
     c = get_country(code)
     user_id = query.from_user.id
-    conn = get_db()
-    user_row = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    user_row = get_user_row(user_id)
     if not user_row:
-        conn.close()
         await safe_edit_callback_message(
             query,
-            text="User not found.",
+            text=t("buy.user_not_found"),
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"country_{code}")]]),
+            reply_markup=InlineKeyboardMarkup(
+                [[ibutton("country.btn_back_browse", callback_data=f"country_{code}")]]
+            ),
         )
         return
     wallet = user_row["wallet_balance"]
     price = c["price_inr"]
     if wallet < price:
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Deposit Funds", callback_data="deposit")],
-            [InlineKeyboardButton("🔙 Back", callback_data=f"country_{code}")],
-        ])
+        kb = InlineKeyboardMarkup(
+            [
+                [ibutton("buy.btn_deposit", callback_data="deposit")],
+                [ibutton("common.back", callback_data=f"country_{code}")],
+            ]
+        )
         await safe_edit_callback_message(
             query,
-            text=f"❌ Insufficient balance.\nNeed ₹{price:.0f}, you have ₹{wallet:.2f}.",
+            text=t("buy.low_balance", need=price, have=wallet),
             parse_mode="HTML",
             reply_markup=kb,
         )
-        conn.close()
         return
-    acc = conn.execute(
-        "SELECT * FROM accounts WHERE country_code=? AND is_sold=0 LIMIT 1", (code,)
-    ).fetchone()
-    if not acc:
-        conn.close()
+    order_id = wallet_buy_transaction(
+        user_id, query.from_user.username or "", code, float(price)
+    )
+    if not order_id:
         await safe_edit_callback_message(
             query,
-            text="❌ No accounts available right now.",
+            text=t("buy.no_accounts"),
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"country_{code}")]]),
+            reply_markup=InlineKeyboardMarkup(
+                [[ibutton("common.back", callback_data=f"country_{code}")]]
+            ),
         )
         return
-    now = now_ist().isoformat()
-    conn.execute("UPDATE accounts SET is_sold=1, sold_to=?, sold_at=? WHERE id=?", (user_id, now, acc["id"]))
-    conn.execute("UPDATE users SET wallet_balance=wallet_balance-?, total_purchases=total_purchases+1 WHERE id=?", (price, user_id))
-    order_id = conn.execute(
-        "INSERT INTO orders (user_id, username, account_id, country_code, amount_inr, payment_method, status, created_at, reviewed_at) VALUES (?,?,?,?,?,?,?,?,?)",
-        (user_id, query.from_user.username or "", acc["id"], code, c["price_inr"], "wallet", "approved", now, now)
-    ).lastrowid
-    conn.commit()
-    conn.close()
-    await send_buy_log(context, c["name"], c["flag"], c["price_inr"], acc["phone_number"])
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("📱 Reveal My Number", callback_data=f"reveal_{order_id}")]])
+    ord_row = get_order_by_id(order_id) or {}
+    acc = get_account_by_id(ord_row.get("account_id")) if ord_row.get("account_id") else None
+    if acc:
+        await send_buy_log(context, c["name"], c["flag"], c["price_inr"], acc["phone_number"])
+    kb = InlineKeyboardMarkup([[ibutton("buy.btn_reveal", callback_data=f"reveal_{order_id}")]])
     await safe_edit_callback_message(
         query,
-        text="✅ Purchased successfully!",
+        text=t("buy.success"),
         parse_mode="HTML",
         reply_markup=kb,
     )
@@ -814,21 +1367,16 @@ async def pay_method(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c = get_country(code)
     note = f"Order for {c['name']}"
     qr_buf = generate_upi_qr(c["price_inr"], note)
-    caption = (
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"💳 UPI Payment\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 Amount: ₹{c['price_inr']:.0f}\n"
-        f"🏦 UPI ID: {UPI_ID}\n"
-        f"📱 Scan with PhonePe / GPay / Paytm / any UPI app\n"
-        f"⚠️ Pay EXACT amount shown\n"
-        f"━━━━━━━━━━━━━━━━━━━━"
+    caption = t("buy.pay_caption", amount=c["price_inr"], upi=escape(UPI_ID))
+    kb = InlineKeyboardMarkup(
+        [
+            [ibutton("buy.btn_upload", callback_data=f"buy_upload_{code}")],
+            [ibutton("common.back", callback_data=f"country_{code}")],
+        ]
     )
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📸 I've Paid — Upload Screenshot", callback_data=f"buy_upload_{code}")],
-        [InlineKeyboardButton("🔙 Back", callback_data=f"country_{code}")],
-    ])
-    await query.message.reply_photo(photo=qr_buf, caption=caption, reply_markup=kb)
+    await query.message.reply_photo(
+        photo=qr_buf, caption=caption, parse_mode="HTML", reply_markup=kb
+    )
     await query.message.delete()
 
 async def buy_upload_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -840,8 +1388,11 @@ async def buy_upload_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["buy_country"] = code
     context.user_data["awaiting_buy_screenshot"] = True
     await query.edit_message_caption(
-        caption="📸 Please send your payment screenshot as a photo.",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"country_{code}")]])
+        caption=t("buy.upload_caption"),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            [[ibutton("buy.btn_cancel", callback_data=f"country_{code}")]]
+        ),
     )
 
 # ─── SCREENSHOT HANDLER ───────────────────────────────────────────────────────
@@ -855,20 +1406,25 @@ async def screenshot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data.pop("awaiting_buy_screenshot")
         code = context.user_data.get("buy_country")
         if not code:
-            await update.message.reply_text("❌ Session expired. Please start again.", reply_markup=main_menu_kb())
+            await update.message.reply_text(
+                t("buy.session_expired"),
+                parse_mode="HTML",
+                reply_markup=main_menu_kb(),
+            )
             return
         c = get_country(code)
         file_id = update.message.photo[-1].file_id if update.message.photo else None
         if not file_id:
-            await update.message.reply_text("❌ Please send a photo.")
+            await update.message.reply_text(t("buy.need_photo"), parse_mode="HTML")
             return
-        conn = get_db()
-        order_id = conn.execute(
-            "INSERT INTO orders (user_id, username, country_code, amount_inr, payment_method, payment_screenshot, status, created_at) VALUES (?,?,?,?,?,?,?,?)",
-            (user.id, user.username or "", code, c["price_inr"], "upi", file_id, "pending", now_ist().isoformat())
-        ).lastrowid
-        conn.commit()
-        conn.close()
+        order_id = insert_pending_order(
+            user.id,
+            user.username or "",
+            code,
+            float(c["price_inr"]),
+            file_id,
+            now_ist().isoformat(),
+        )
         text = (
             f"┌─────────────────────┐\n"
             f"🆕 NEW ORDER #{order_id}\n"
@@ -881,16 +1437,27 @@ async def screenshot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"└─────────────────────┘"
         )
         kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton(f"✅ Approve #{order_id}", callback_data=f"approve_order_{order_id}"),
-            InlineKeyboardButton(f"❌ Reject #{order_id}", callback_data=f"reject_order_{order_id}"),
+            ibutton_raw(
+                f"✅ Approve #{order_id}",
+                callback_data=f"approve_order_{order_id}",
+                icon_slot="check",
+                style="success",
+            ),
+            ibutton_raw(
+                f"❌ Reject #{order_id}",
+                callback_data=f"reject_order_{order_id}",
+                icon_slot="cross",
+                style="danger",
+            ),
         ]])
         try:
             await context.bot.send_photo(chat_id=ADMIN_GROUP_ID, photo=file_id, caption=text, reply_markup=kb)
         except Exception as e:
             logger.error(f"Failed to forward to admin group: {e}")
         await update.message.reply_text(
-            "⏳ Payment submitted! Under review. You'll be notified when approved.",
-            reply_markup=main_menu_kb()
+            t("buy.submitted"),
+            parse_mode="HTML",
+            reply_markup=main_menu_kb(),
         )
         return
 
@@ -900,15 +1467,9 @@ async def screenshot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         dep_inr = context.user_data.get("dep_inr", 0)
         file_id = update.message.photo[-1].file_id if update.message.photo else None
         if not file_id:
-            await update.message.reply_text("❌ Please send a photo.")
+            await update.message.reply_text(t("buy.need_photo"), parse_mode="HTML")
             return
-        conn = get_db()
-        dep_id = conn.execute(
-            "INSERT INTO deposits (user_id, amount_inr, payment_method, screenshot, status, created_at) VALUES (?,?,?,?,?,?)",
-            (user.id, dep_inr, "upi", file_id, "pending", now_ist().isoformat())
-        ).lastrowid
-        conn.commit()
-        conn.close()
+        dep_id = insert_pending_deposit(user.id, float(dep_inr), file_id, now_ist().isoformat())
         text = (
             f"┌─────────────────────┐\n"
             f"💰 DEPOSIT REQUEST #{dep_id}\n"
@@ -920,16 +1481,27 @@ async def screenshot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"└─────────────────────┘"
         )
         kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton(f"✅ Approve Deposit #{dep_id}", callback_data=f"approve_deposit_{dep_id}"),
-            InlineKeyboardButton(f"❌ Reject Deposit #{dep_id}", callback_data=f"reject_deposit_{dep_id}"),
+            ibutton_raw(
+                f"✅ Approve Deposit #{dep_id}",
+                callback_data=f"approve_deposit_{dep_id}",
+                icon_slot="check",
+                style="success",
+            ),
+            ibutton_raw(
+                f"❌ Reject Deposit #{dep_id}",
+                callback_data=f"reject_deposit_{dep_id}",
+                icon_slot="cross",
+                style="danger",
+            ),
         ]])
         try:
             await context.bot.send_photo(chat_id=ADMIN_GROUP_ID, photo=file_id, caption=text, reply_markup=kb)
         except Exception as e:
             logger.error(f"Failed to forward deposit to admin group: {e}")
         await update.message.reply_text(
-            "⏳ Deposit submitted! Under review. You'll be notified when approved.",
-            reply_markup=main_menu_kb()
+            t("buy.dep_submitted"),
+            parse_mode="HTML",
+            reply_markup=main_menu_kb(),
         )
         return
 
@@ -941,20 +1513,17 @@ async def reveal_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     order_id = int(query.data.split("_")[1])
     user_id = query.from_user.id
-    conn = get_db()
-    order = conn.execute("SELECT * FROM orders WHERE id=? AND user_id=?", (order_id, user_id)).fetchone()
+    order = get_order_for_user(order_id, user_id)
     if not order or order["status"] != "approved":
-        conn.close()
         await safe_edit_callback_message(
             query,
-            text="❌ Order not found or not approved.",
+            text=t("orders.not_approved"),
             parse_mode="HTML",
             reply_markup=None,
         )
         return
-    acc = conn.execute("SELECT * FROM accounts WHERE id=?", (order["account_id"],)).fetchone()
+    acc = get_account_by_id(order.get("account_id")) if order.get("account_id") else None
     c = get_country(order["country_code"])
-    conn.close()
     if not acc:
         await safe_edit_callback_message(
             query,
@@ -972,8 +1541,22 @@ async def reveal_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"━━━━━━━━━━━━━━━━━━━━"
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📨 Get Latest OTP", callback_data=f"getotp_{acc['id']}")],
-        [InlineKeyboardButton("📦 My Orders", callback_data="my_orders_0")],
+        [
+            ibutton_raw(
+                "📨 Get Latest OTP",
+                callback_data=f"getotp_{acc['id']}",
+                icon_slot="inbox",
+                style="primary",
+            )
+        ],
+        [
+            ibutton_raw(
+                "📦 My Orders",
+                callback_data="my_orders_0",
+                icon_slot="package",
+                style="success",
+            )
+        ],
     ])
     await safe_edit_callback_message(
         query,
@@ -989,9 +1572,7 @@ async def get_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await guard(update, context):
         return
     acc_id = int(query.data.split("_")[1])
-    conn = get_db()
-    acc = conn.execute("SELECT * FROM accounts WHERE id=?", (acc_id,)).fetchone()
-    conn.close()
+    acc = get_account_by_id(acc_id)
     if not acc:
         await safe_edit_callback_message(
             query,
@@ -1027,7 +1608,18 @@ async def get_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     if error_msg:
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"reveal_{_get_order_for_account(acc_id)}")]])
+        kb = InlineKeyboardMarkup(
+            [
+                [
+                    ibutton_raw(
+                        "🔙 Back",
+                        callback_data=f"reveal_{_get_order_for_account(acc_id)}",
+                        icon_slot="package",
+                        style="primary",
+                    )
+                ]
+            ]
+        )
         await safe_edit_callback_message(
             query,
             text=error_msg,
@@ -1043,8 +1635,22 @@ async def get_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⏱ Fetched at: {now_ist().strftime('%H:%M:%S IST')}"
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Refresh OTP", callback_data=f"getotp_{acc_id}")],
-        [InlineKeyboardButton("🔙 Back", callback_data=f"getotp_back_{acc_id}")],
+        [
+            ibutton_raw(
+                "🔄 Refresh OTP",
+                callback_data=f"getotp_{acc_id}",
+                icon_slot="star",
+                style="success",
+            )
+        ],
+        [
+            ibutton_raw(
+                "🔙 Back",
+                callback_data=f"getotp_back_{acc_id}",
+                icon_slot="package",
+                style="primary",
+            )
+        ],
     ])
     await safe_edit_callback_message(
         query,
@@ -1068,10 +1674,7 @@ async def _fetch_otp(client):
     return None
 
 def _get_order_for_account(acc_id):
-    conn = get_db()
-    row = conn.execute("SELECT id FROM orders WHERE account_id=? AND status='approved' LIMIT 1", (acc_id,)).fetchone()
-    conn.close()
-    return row["id"] if row else 0
+    return order_id_for_account(acc_id)
 
 async def getotp_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1087,25 +1690,19 @@ async def wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     if await guard(update, context):
         return
-    conn = get_db()
-    row = conn.execute("SELECT wallet_balance FROM users WHERE id=?", (query.from_user.id,)).fetchone()
-    conn.close()
-    bal = row["wallet_balance"] if row else 0
-    text = (
-        f"💰 *My Wallet*\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"💵 Balance: ₹{bal:.2f} INR\n"
-        f"━━━━━━━━━━━━━━━━━━━━"
+    bal = get_wallet_balance(query.from_user.id)
+    text = t("wallet.panel", bal=bal)
+    kb = InlineKeyboardMarkup(
+        [
+            [ibutton("wallet.btn_deposit", callback_data="deposit")],
+            [ibutton("wallet.btn_dep_hist", callback_data="dep_hist_0")],
+            [ibutton("common.main_menu", callback_data="main_menu")],
+        ]
     )
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Deposit via UPI", callback_data="deposit")],
-        [InlineKeyboardButton("📋 Deposit History", callback_data="dep_hist_0")],
-        [InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")],
-    ])
     await safe_edit_callback_message(
         query,
         text=text,
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=kb,
     )
 
@@ -1118,13 +1715,11 @@ async def deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["awaiting_dep_amount"] = True
     await safe_edit_callback_message(
         query,
-        text=(
-            "💳 *UPI Deposit*\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "Enter amount in INR to deposit:\n_(Minimum ₹50)_"
+        text=t("wallet.deposit_prompt"),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            [[ibutton("buy.btn_cancel", callback_data="wallet")]]
         ),
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="wallet")]]),
     )
 
 # ─── TEXT HANDLER ─────────────────────────────────────────────────────────────
@@ -1146,13 +1741,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         country_code_iso, country_name, country_flag = result
         c = get_country(country_code_iso)
         if not c:
-            conn = get_db()
-            conn.execute(
-                "INSERT OR IGNORE INTO countries (code, name, flag) VALUES (?,?,?)",
-                (country_code_iso, country_name, country_flag)
-            )
-            conn.commit()
-            conn.close()
+            ensure_country_row(country_code_iso, country_name, country_flag)
             c = get_country(country_code_iso)
 
         context.user_data.pop("awaiting_admin_dialing_code")
@@ -1199,21 +1788,15 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["dep_inr"] = amount
         note = f"Deposit by {user.id}"
         qr_buf = generate_upi_qr(amount, note)
-        caption = (
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"💳 UPI Deposit\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 Amount: ₹{amount:.0f}\n"
-            f"🏦 UPI ID: {UPI_ID}\n"
-            f"📱 Scan with PhonePe / GPay / Paytm / any UPI app\n"
-            f"⚠️ Pay EXACT amount shown\n"
-            f"━━━━━━━━━━━━━━━━━━━━"
-        )
+        caption = t("buy.pay_caption", amount=amount, upi=escape(UPI_ID))
         context.user_data["awaiting_deposit_screenshot"] = True
         await update.message.reply_photo(
             photo=qr_buf,
             caption=caption,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📸 I've Paid — Upload Screenshot", callback_data="upload_dep_screenshot")]])
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                [[ibutton("buy.btn_upload", callback_data="upload_dep_screenshot")]]
+            ),
         )
         return
 
@@ -1225,14 +1808,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             await update.message.reply_text("❌ Invalid amount.")
             return
-        conn = get_db()
-        conn.execute("UPDATE users SET wallet_balance=wallet_balance+? WHERE id=?", (delta, uid))
-        conn.commit()
-        row = conn.execute("SELECT wallet_balance FROM users WHERE id=?", (uid,)).fetchone()
-        conn.close()
+        new_bal = adjust_wallet(uid, delta)
         sign = "+" if delta >= 0 else ""
         await update.message.reply_text(
-            f"✅ Balance updated: {sign}{delta:.2f} INR\nNew balance: ₹{row['wallet_balance']:.2f}",
+            f"✅ Balance updated: {sign}{delta:.2f} INR\nNew balance: ₹{new_bal:.2f}",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Admin Menu", callback_data="admin_menu")]])
         )
         return
@@ -1246,10 +1825,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         code = context.user_data.pop("admin_set_price_code")
         context.user_data.pop("awaiting_price_inr")
-        conn = get_db()
-        conn.execute("UPDATE countries SET price_inr=? WHERE code=?", (price, code))
-        conn.commit()
-        conn.close()
+        set_country_price(code, float(price))
         c = get_country(code)
         await update.message.reply_text(
             f"✅ {c['flag']} {c['name']}: ₹{price:.0f} INR",
@@ -1306,17 +1882,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("awaiting_remove_acc"):
         context.user_data.pop("awaiting_remove_acc")
         query_val = update.message.text.strip()
-        conn = get_db()
-        if query_val.startswith("+"):
-            acc = conn.execute("SELECT * FROM accounts WHERE phone_number=?", (query_val.lstrip("+"),)).fetchone()
-        else:
+        if not query_val.startswith("+"):
             try:
-                acc = conn.execute("SELECT * FROM accounts WHERE id=?", (int(query_val),)).fetchone()
+                int(query_val)
             except ValueError:
-                conn.close()
                 await update.message.reply_text("❌ Invalid ID.")
                 return
-        conn.close()
+        acc = find_account_by_phone_or_id(query_val)
         if not acc:
             await update.message.reply_text("❌ Account not found.")
             return
@@ -1333,9 +1905,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Admin: broadcast
     if context.user_data.get("awaiting_broadcast"):
         context.user_data.pop("awaiting_broadcast")
-        conn = get_db()
-        total = conn.execute("SELECT COUNT(*) as cnt FROM users WHERE is_banned=0").fetchone()["cnt"]
-        conn.close()
+        total = count_active_users()
         context.user_data["broadcast_msg_id"] = update.message.message_id
         context.user_data["broadcast_chat_id"] = update.message.chat_id
         kb = InlineKeyboardMarkup([
@@ -1349,13 +1919,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("awaiting_search_user"):
         context.user_data.pop("awaiting_search_user")
         query_val = update.message.text.strip().lstrip("@")
-        conn = get_db()
-        try:
-            uid = int(query_val)
-            row = conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
-        except ValueError:
-            row = conn.execute("SELECT * FROM users WHERE username=?", (query_val,)).fetchone()
-        conn.close()
+        row = find_user_by_id_or_username(query_val)
         if not row:
             await update.message.reply_text("❌ User not found.")
             return
@@ -1380,16 +1944,17 @@ async def _finalize_add_account(update, context):
     price_inr = context.user_data.pop("add_acc_price_inr", None)
     context.user_data.pop("add_acc_step", None)
     phone = phone.lstrip("+")
-    conn = get_db()
-    conn.execute(
-        "INSERT INTO accounts (country_code, phone_number, session_string, two_fa_password, added_by, added_at) VALUES (?,?,?,?,?,?)",
-        (code, phone, session, twofa, update.effective_user.id, now_ist().isoformat())
+    insert_account(
+        code,
+        phone,
+        session,
+        twofa,
+        update.effective_user.id,
+        now_ist().isoformat(),
     )
     if price_inr is not None:
-        conn.execute("UPDATE countries SET price_inr=? WHERE code=?", (price_inr, code))
-    conn.commit()
+        set_country_price(code, float(price_inr))
     stock = get_stock_count(code)
-    conn.close()
     c = get_country(code)
     inr_str = f"₹{price_inr:.0f}" if price_inr else f"₹{c['price_inr']:.0f}"
     kb = InlineKeyboardMarkup([
@@ -1422,8 +1987,13 @@ async def upload_dep_screenshot_cb(update: Update, context: ContextTypes.DEFAULT
     await query.answer()
     context.user_data["awaiting_deposit_screenshot"] = True
     await query.edit_message_caption(
-        caption=(query.message.caption or "") + "\n📸 Please send your screenshot as a photo.",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="wallet")]])
+        caption=(query.message.caption or "")
+        + "\n"
+        + t("buy.upload_caption"),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            [[ibutton("buy.btn_cancel", callback_data="wallet")]]
+        ),
     )
 
 # ─── ADD ACC SKIP PRICE ───────────────────────────────────────────────────────
@@ -1442,18 +2012,15 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     page = int(query.data.split("_")[2])
     user_id = query.from_user.id
-    conn = get_db()
-    orders = conn.execute(
-        "SELECT o.*, c.flag, c.name as cname FROM orders o LEFT JOIN countries c ON o.country_code=c.code WHERE o.user_id=? ORDER BY o.created_at DESC",
-        (user_id,)
-    ).fetchall()
-    conn.close()
+    orders = orders_for_user(user_id)
     if not orders:
         await safe_edit_callback_message(
             query,
-            text="📦 No orders yet.",
+            text=t("orders.none"),
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]]),
+            reply_markup=InlineKeyboardMarkup(
+                [[ibutton("common.main_menu", callback_data="main_menu")]]
+            ),
         )
         return
     per_page = 5
@@ -1465,20 +2032,36 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for o in chunk:
         status_e = status_emoji(o["status"])
         label = f"#{o['id']} | {o['flag'] or ''}{o['cname'] or '?'} | ₹{o['amount_inr']:.0f} | {status_e}"
-        buttons.append([InlineKeyboardButton(label, callback_data=f"order_detail_{o['id']}")])
+        buttons.append(
+            [
+                ibutton_raw(
+                    label,
+                    callback_data=f"order_detail_{o['id']}",
+                    icon_slot="package",
+                    style="success",
+                )
+            ]
+        )
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"my_orders_{page-1}"))
-        nav.append(InlineKeyboardButton(f"{page+1}/{pages}", callback_data="noop"))
+        nav.append(ibutton("orders.btn_prev", callback_data=f"my_orders_{page-1}"))
+        nav.append(
+            ibutton(
+                "browse.btn_page",
+                callback_data="noop",
+                cur=page + 1,
+                pages=pages,
+            )
+        )
     if page < pages - 1:
-        nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"my_orders_{page+1}"))
+        nav.append(ibutton("orders.btn_next", callback_data=f"my_orders_{page+1}"))
     if nav:
         buttons.append(nav)
-    buttons.append([InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")])
+    buttons.append([ibutton("common.main_menu", callback_data="main_menu")])
     await safe_edit_callback_message(
         query,
-        text="📦 *My Orders*",
-        parse_mode="Markdown",
+        text=t("orders.header"),
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(buttons),
     )
 
@@ -1489,38 +2072,37 @@ async def order_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     order_id = int(query.data.split("_")[2])
     user_id = query.from_user.id
-    conn = get_db()
-    o = conn.execute(
-        "SELECT o.*, c.flag, c.name as cname FROM orders o LEFT JOIN countries c ON o.country_code=c.code WHERE o.id=? AND o.user_id=?",
-        (order_id, user_id)
-    ).fetchone()
-    conn.close()
+    o = get_order_for_user(order_id, user_id)
     if not o:
         await safe_edit_callback_message(
             query,
-            text="❌ Order not found.",
+            text=t("orders.not_found"),
             parse_mode="HTML",
             reply_markup=None,
         )
         return
-    text = (
-        f"📦 *Order #{o['id']}*\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🌍 Country: {o['flag'] or ''} {o['cname'] or 'N/A'}\n"
-        f"💰 Amount: ₹{o['amount_inr']:.0f} INR\n"
-        f"💳 Method: UPI\n"
-        f"📊 Status: {status_emoji(o['status'])} {o['status'].title()}\n"
-        f"📅 Date: {fmt_time(o['created_at'])}\n"
-        f"━━━━━━━━━━━━━━━━━━━━"
+    o = dict(o)
+    ch = get_country(o.get("country_code") or "")
+    o["flag"] = ch["flag"] if ch else None
+    o["cname"] = ch["name"] if ch else None
+    text = t(
+        "orders.detail",
+        oid=o["id"],
+        flag=o["flag"] or "",
+        cname=escape(o["cname"] or "N/A"),
+        amount=o["amount_inr"],
+        status_emoji=status_emoji(o["status"]),
+        status=sc(o["status"].title()),
+        created=fmt_time(o["created_at"]),
     )
     buttons = []
     if o["status"] == "approved" and o["account_id"]:
-        buttons.append([InlineKeyboardButton("📱 Reveal Number", callback_data=f"reveal_{o['id']}")])
-    buttons.append([InlineKeyboardButton("🔙 My Orders", callback_data="my_orders_0")])
+        buttons.append([ibutton("orders.btn_reveal", callback_data=f"reveal_{o['id']}")])
+    buttons.append([ibutton("orders.btn_back_orders", callback_data="my_orders_0")])
     await safe_edit_callback_message(
         query,
         text=text,
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(buttons),
     )
 
@@ -1532,17 +2114,15 @@ async def dep_hist(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     page = int(query.data.split("_")[2])
     user_id = query.from_user.id
-    conn = get_db()
-    deps = conn.execute(
-        "SELECT * FROM deposits WHERE user_id=? ORDER BY created_at DESC", (user_id,)
-    ).fetchall()
-    conn.close()
+    deps = deposits_for_user(user_id)
     if not deps:
         await safe_edit_callback_message(
             query,
-            text="No deposits yet.",
+            text=t("wallet.dep_empty"),
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Wallet", callback_data="wallet")]]),
+            reply_markup=InlineKeyboardMarkup(
+                [[ibutton("wallet.btn_back_wallet", callback_data="wallet")]]
+            ),
         )
         return
     per_page = 5
@@ -1554,21 +2134,28 @@ async def dep_hist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for d in chunk:
         date = fmt_time(d["created_at"])[:11]
         lines.append(f"#{d['id']} | UPI | ₹{d['amount_inr']:.0f} | {status_emoji(d['status'])} | {date}")
-    text = "📋 *Deposit History*\n" + "\n".join(lines)
+    text = t("wallet.dep_header") + "\n" + "\n".join(lines)
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"dep_hist_{page-1}"))
-        nav.append(InlineKeyboardButton(f"{page+1}/{pages}", callback_data="noop"))
+        nav.append(ibutton("browse.btn_prev", callback_data=f"dep_hist_{page-1}"))
+        nav.append(
+            ibutton(
+                "browse.btn_page",
+                callback_data="noop",
+                cur=page + 1,
+                pages=pages,
+            )
+        )
     if page < pages - 1:
-        nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"dep_hist_{page+1}"))
+        nav.append(ibutton("browse.btn_next", callback_data=f"dep_hist_{page+1}"))
     buttons = []
     if nav:
         buttons.append(nav)
-    buttons.append([InlineKeyboardButton("🔙 Wallet", callback_data="wallet")])
+    buttons.append([ibutton("wallet.btn_back_wallet", callback_data="wallet")])
     await safe_edit_callback_message(
         query,
         text=text,
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(buttons),
     )
 
@@ -1576,21 +2163,13 @@ async def dep_hist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    text = (
-        "<b>❓ ʜᴏᴡ ᴛᴏ ʙᴜʏ ɴᴜᴍʙᴇʀꜱ</b>\n"
-        "<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
-        "<b>• ʙʀᴏᴡꜱᴇ ᴀᴠᴀɪʟᴀʙʟᴇ ᴄᴏᴜɴᴛʀɪᴇꜱ</b>\n"
-        "<b>• ꜱᴇʟᴇᴄᴛ ʏᴏᴜʀ ɴᴇᴇᴅᴇᴅ ɴᴜᴍʙᴇʀ</b>\n"
-        "<b>• ᴘᴀʏ ꜱᴇᴄᴜʀᴇʟʏ ᴠɪᴀ ᴜᴘɪ</b>\n"
-        "<b>• ᴜᴘʟᴏᴀᴅ ʏᴏᴜʀ ᴘᴀʏᴍᴇɴᴛ ꜱᴄʀᴇᴇɴꜱʜᴏᴛ</b>\n"
-        "<b>• ɢᴇᴛ ᴀᴘᴘʀᴏᴠᴇᴅ ᴀɴᴅ ʀᴇᴠᴇᴀʟ ʏᴏᴜʀ ɴᴜᴍʙᴇʀ</b>\n"
-        "<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
-        "<b>ɪꜰ ʏᴏᴜ ɴᴇᴇᴅ ᴀɴʏ ᴀꜱꜱɪꜱᴛᴀɴᴄᴇ, ᴏᴘᴇɴ ꜱᴜᴘᴘᴏʀᴛ ᴀɴᴅ ꜱᴇʟᴇᴄᴛ ᴛʜᴇ ʟɪɴᴋ ʙᴇʟᴏᴡ.</b>"
+    text = t("help.body")
+    kb = InlineKeyboardMarkup(
+        [
+            [ibutton("help.btn_support", url="https://t.me/ll_PRIME_DENJI_ll")],
+            [ibutton("help.btn_main", callback_data="main_menu")],
+        ]
     )
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("💬 ᴄᴏɴᴛᴀᴄᴛ ꜱᴜᴘᴘᴏʀᴛ", url="https://t.me/ll_PRIME_DENJI_ll")],
-        [InlineKeyboardButton("🔙 ᴍᴀɪɴ ᴍᴇɴᴜ", callback_data="main_menu")],
-    ])
     await safe_edit_callback_message(query, text=text, parse_mode="HTML", reply_markup=kb)
 
 async def main_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1609,30 +2188,20 @@ async def approve_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await query.answer()
     order_id = int(query.data.split("_")[2])
-    conn = get_db()
-    order = conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
-    if not order or order["status"] != "pending":
-        conn.close()
+    order_before = get_order_by_id(order_id)
+    if not order_before or order_before["status"] != "pending":
         await query.edit_message_caption(caption=(query.message.caption or "") + "\n⚠️ Order already processed.")
         return
-    acc = conn.execute(
-        "SELECT * FROM accounts WHERE country_code=? AND is_sold=0 LIMIT 1", (order["country_code"],)
-    ).fetchone()
-    if not acc:
-        conn.close()
+    result = approve_order_transaction(order_id, query.from_user.id)
+    if not result:
         await query.answer("❌ No stock available!", show_alert=True)
         return
-    now = now_ist().isoformat()
-    conn.execute("UPDATE accounts SET is_sold=1, sold_to=?, sold_at=? WHERE id=?", (order["user_id"], now, acc["id"]))
-    conn.execute("UPDATE orders SET status='approved', account_id=?, reviewed_by=?, reviewed_at=? WHERE id=?",
-                 (acc["id"], query.from_user.id, now, order_id))
-    conn.execute("UPDATE users SET total_purchases=total_purchases+1 WHERE id=?", (order["user_id"],))
-    conn.commit()
-    conn.close()
+    order = result["order"]
+    acc = result["acc"]
     c = get_country(order["country_code"])
     if c:
         await send_buy_log(context, c["name"], c["flag"], order["amount_inr"], acc["phone_number"])
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("📱 Reveal My Number", callback_data=f"reveal_{order_id}")]])
+    kb = InlineKeyboardMarkup([[ibutton("buy.btn_reveal", callback_data=f"reveal_{order_id}")]])
     try:
         await context.bot.send_message(
             chat_id=order["user_id"],
@@ -1650,17 +2219,10 @@ async def reject_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await query.answer()
     order_id = int(query.data.split("_")[2])
-    conn = get_db()
-    order = conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
-    if not order or order["status"] != "pending":
-        conn.close()
+    order = reject_order_db(order_id, query.from_user.id)
+    if not order:
         await query.edit_message_caption(caption=(query.message.caption or "") + "\n⚠️ Order already processed.")
         return
-    now = now_ist().isoformat()
-    conn.execute("UPDATE orders SET status='rejected', reviewed_by=?, reviewed_at=? WHERE id=?",
-                 (query.from_user.id, now, order_id))
-    conn.commit()
-    conn.close()
     try:
         await context.bot.send_message(
             chat_id=order["user_id"],
@@ -1678,18 +2240,10 @@ async def approve_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await query.answer()
     dep_id = int(query.data.split("_")[2])
-    conn = get_db()
-    dep = conn.execute("SELECT * FROM deposits WHERE id=?", (dep_id,)).fetchone()
-    if not dep or dep["status"] != "pending":
-        conn.close()
+    dep = approve_deposit_db(dep_id, query.from_user.id)
+    if not dep:
         await query.edit_message_caption(caption=(query.message.caption or "") + "\n⚠️ Already processed.")
         return
-    now = now_ist().isoformat()
-    conn.execute("UPDATE deposits SET status='approved', reviewed_by=?, reviewed_at=? WHERE id=?",
-                 (query.from_user.id, now, dep_id))
-    conn.execute("UPDATE users SET wallet_balance=wallet_balance+? WHERE id=?", (dep["amount_inr"], dep["user_id"]))
-    conn.commit()
-    conn.close()
     try:
         await context.bot.send_message(
             chat_id=dep["user_id"],
@@ -1707,17 +2261,10 @@ async def reject_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await query.answer()
     dep_id = int(query.data.split("_")[2])
-    conn = get_db()
-    dep = conn.execute("SELECT * FROM deposits WHERE id=?", (dep_id,)).fetchone()
-    if not dep or dep["status"] != "pending":
-        conn.close()
+    dep = reject_deposit_db(dep_id, query.from_user.id)
+    if not dep:
         await query.edit_message_caption(caption=(query.message.caption or "") + "\n⚠️ Already processed.")
         return
-    now = now_ist().isoformat()
-    conn.execute("UPDATE deposits SET status='rejected', reviewed_by=?, reviewed_at=? WHERE id=?",
-                 (query.from_user.id, now, dep_id))
-    conn.commit()
-    conn.close()
     try:
         await context.bot.send_message(chat_id=dep["user_id"], text=f"❌ Deposit #{dep_id} rejected.")
     except Exception:
@@ -1729,7 +2276,11 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("❌ Not authorized.")
         return
-    await update.message.reply_text("🔧 *Admin Panel*", parse_mode="Markdown", reply_markup=admin_main_kb())
+    await update.message.reply_text(
+        t("admin_cmd.reply"),
+        parse_mode="HTML",
+        reply_markup=admin_main_kb(),
+    )
 
 def admin_main_kb():
     return InlineKeyboardMarkup([
@@ -1811,9 +2362,7 @@ async def view_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(query.from_user.id):
         return
     page = int(query.data.split("_")[2])
-    conn = get_db()
-    countries = conn.execute("SELECT * FROM countries ORDER BY name").fetchall()
-    conn.close()
+    countries = list_countries_sorted()
     per_page = 8
     total = len(countries)
     pages = max(1, (total + per_page - 1) // per_page)
@@ -1822,9 +2371,7 @@ async def view_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = []
     for c in chunk:
         avail = get_stock_count(c["code"])
-        conn2 = get_db()
-        total_acc = conn2.execute("SELECT COUNT(*) as cnt FROM accounts WHERE country_code=?", (c["code"],)).fetchone()["cnt"]
-        conn2.close()
+        total_acc = count_accounts_for_country(c["code"])
         lines.append(f"{c['flag']} {c['name']}: {avail} available / {total_acc} total")
     text = "📋 *Stock by Country*\n" + "\n".join(lines)
     nav = []
@@ -1856,10 +2403,7 @@ async def confirm_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(query.from_user.id):
         return
     acc_id = int(query.data.split("_")[2])
-    conn = get_db()
-    conn.execute("DELETE FROM accounts WHERE id=?", (acc_id,))
-    conn.commit()
-    conn.close()
+    delete_account_by_id(acc_id)
     await query.edit_message_text("✅ Account deleted.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Stock", callback_data="admin_stock")]]))
 
 # ── COUNTRIES ──────────────────────────────────────────────────────────────────
@@ -1881,9 +2425,7 @@ async def set_prices(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(query.from_user.id):
         return
     page = int(query.data.split("_")[2])
-    conn = get_db()
-    countries = conn.execute("SELECT * FROM countries ORDER BY name").fetchall()
-    conn.close()
+    countries = list_countries_sorted()
     per_page = 8
     total = len(countries)
     pages = max(1, (total + per_page - 1) // per_page)
@@ -1922,9 +2464,7 @@ async def toggle_countries(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(query.from_user.id):
         return
     page = int(query.data.split("_")[2])
-    conn = get_db()
-    countries = conn.execute("SELECT * FROM countries ORDER BY name").fetchall()
-    conn.close()
+    countries = list_countries_sorted()
     per_page = 8
     total = len(countries)
     pages = max(1, (total + per_page - 1) // per_page)
@@ -1951,12 +2491,9 @@ async def togglec_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(query.from_user.id):
         return
     code = query.data.split("togglec_")[1]
-    conn = get_db()
-    row = conn.execute("SELECT enabled FROM countries WHERE code=?", (code,)).fetchone()
-    new_val = 0 if row["enabled"] else 1
-    conn.execute("UPDATE countries SET enabled=? WHERE code=?", (new_val, code))
-    conn.commit()
-    conn.close()
+    toggle_country_enabled(code)
+    row = get_country(code) or {}
+    new_val = row.get("enabled", 0)
     await query.answer(f"{'✅ Enabled' if new_val else '❌ Disabled'}")
     query.data = "toggle_countries_0"
     await toggle_countries(update, context)
@@ -1970,17 +2507,7 @@ async def admin_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = query.data.split("_")
     status_filter = parts[2]
     page = int(parts[3])
-    conn = get_db()
-    if status_filter == "all":
-        orders = conn.execute(
-            "SELECT o.*, c.flag, c.name as cname FROM orders o LEFT JOIN countries c ON o.country_code=c.code ORDER BY o.created_at DESC"
-        ).fetchall()
-    else:
-        orders = conn.execute(
-            "SELECT o.*, c.flag, c.name as cname FROM orders o LEFT JOIN countries c ON o.country_code=c.code WHERE o.status=? ORDER BY o.created_at DESC",
-            (status_filter,)
-        ).fetchall()
-    conn.close()
+    orders = orders_admin_list(status_filter)
     filter_btns = [
         InlineKeyboardButton("⏳ Pending", callback_data="admin_orders_pending_0"),
         InlineKeyboardButton("✅ Approved", callback_data="admin_orders_approved_0"),
@@ -2015,12 +2542,12 @@ async def admin_order_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(query.from_user.id):
         return
     order_id = int(query.data.split("_")[3])
-    conn = get_db()
-    o = conn.execute(
-        "SELECT o.*, c.flag, c.name as cname FROM orders o LEFT JOIN countries c ON o.country_code=c.code WHERE o.id=?",
-        (order_id,)
-    ).fetchone()
-    conn.close()
+    o = get_order_by_id(order_id)
+    if o:
+        ch = get_country(o.get("country_code") or "")
+        o = dict(o)
+        o["flag"] = ch["flag"] if ch else None
+        o["cname"] = ch["name"] if ch else None
     if not o:
         await query.edit_message_text("Order not found.")
         return
@@ -2036,10 +2563,22 @@ async def admin_order_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = []
     if o["status"] == "pending":
         buttons.append([
-            InlineKeyboardButton("✅ Approve", callback_data=f"approve_order_{order_id}"),
-            InlineKeyboardButton("❌ Reject", callback_data=f"reject_order_{order_id}"),
+            ibutton_raw(
+                "✅ Approve",
+                callback_data=f"approve_order_{order_id}",
+                icon_slot="check",
+                style="success",
+            ),
+            ibutton_raw(
+                "❌ Reject",
+                callback_data=f"reject_order_{order_id}",
+                icon_slot="cross",
+                style="danger",
+            ),
         ])
-    buttons.append([InlineKeyboardButton("🔙 Orders", callback_data="admin_orders_all_0")])
+    buttons.append(
+        [ibutton_raw("🔙 Orders", callback_data="admin_orders_all_0", icon_slot="package", style="primary")]
+    )
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
 # ── USERS (ADMIN) ──────────────────────────────────────────────────────────────
@@ -2119,26 +2658,20 @@ async def _show_user_profile(update, context, row, via_message=False):
 
 async def ban_uid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
     if not is_admin(query.from_user.id):
+        await query.answer("❌ Not authorized.", show_alert=True)
         return
     uid = int(query.data.split("_")[2])
-    conn = get_db()
-    conn.execute("UPDATE users SET is_banned=1 WHERE id=?", (uid,))
-    conn.commit()
-    conn.close()
+    ban_user(uid)
     await query.answer("🚫 User banned!", show_alert=True)
 
 async def unban_uid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
     if not is_admin(query.from_user.id):
+        await query.answer("❌ Not authorized.", show_alert=True)
         return
     uid = int(query.data.split("_")[2])
-    conn = get_db()
-    conn.execute("UPDATE users SET is_banned=0 WHERE id=?", (uid,))
-    conn.commit()
-    conn.close()
+    unban_user(uid)
     await query.answer("✅ User unbanned!", show_alert=True)
 
 async def editbal_uid(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2162,12 +2695,7 @@ async def admin_deps(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = query.data.split("_")
     status_filter = parts[2]
     page = int(parts[3])
-    conn = get_db()
-    if status_filter == "all":
-        deps = conn.execute("SELECT * FROM deposits ORDER BY created_at DESC").fetchall()
-    else:
-        deps = conn.execute("SELECT * FROM deposits WHERE status=? ORDER BY created_at DESC", (status_filter,)).fetchall()
-    conn.close()
+    deps = deposits_admin_list(status_filter)
     filter_btns = [
         InlineKeyboardButton("⏳ Pending", callback_data="admin_deps_pending_0"),
         InlineKeyboardButton("✅ Approved", callback_data="admin_deps_approved_0"),
@@ -2202,9 +2730,7 @@ async def admin_dep_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(query.from_user.id):
         return
     dep_id = int(query.data.split("_")[3])
-    conn = get_db()
-    d = conn.execute("SELECT * FROM deposits WHERE id=?", (dep_id,)).fetchone()
-    conn.close()
+    d = get_deposit_by_id(dep_id)
     if not d:
         await query.edit_message_text("Deposit not found.")
         return
@@ -2219,10 +2745,22 @@ async def admin_dep_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = []
     if d["status"] == "pending":
         buttons.append([
-            InlineKeyboardButton("✅ Approve", callback_data=f"approve_deposit_{dep_id}"),
-            InlineKeyboardButton("❌ Reject", callback_data=f"reject_deposit_{dep_id}"),
+            ibutton_raw(
+                "✅ Approve",
+                callback_data=f"approve_deposit_{dep_id}",
+                icon_slot="check",
+                style="success",
+            ),
+            ibutton_raw(
+                "❌ Reject",
+                callback_data=f"reject_deposit_{dep_id}",
+                icon_slot="cross",
+                style="danger",
+            ),
         ])
-    buttons.append([InlineKeyboardButton("🔙 Deposits", callback_data="admin_deps_all_0")])
+    buttons.append(
+        [ibutton_raw("🔙 Deposits", callback_data="admin_deps_all_0", icon_slot="wallet", style="success")]
+    )
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
 # ── STATS ──────────────────────────────────────────────────────────────────────
@@ -2231,17 +2769,15 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     if not is_admin(query.from_user.id):
         return
-    conn = get_db()
-    total_users = conn.execute("SELECT COUNT(*) as c FROM users").fetchone()["c"]
-    total_stock = conn.execute("SELECT COUNT(*) as c FROM accounts").fetchone()["c"]
-    avail_stock = conn.execute("SELECT COUNT(*) as c FROM accounts WHERE is_sold=0").fetchone()["c"]
-    sold = conn.execute("SELECT COUNT(*) as c FROM accounts WHERE is_sold=1").fetchone()["c"]
-    revenue_row = conn.execute("SELECT SUM(amount_inr) as s FROM orders WHERE status='approved'").fetchone()
-    revenue = revenue_row["s"] or 0
-    pending_orders = conn.execute("SELECT COUNT(*) as c FROM orders WHERE status='pending'").fetchone()["c"]
-    pending_deps = conn.execute("SELECT COUNT(*) as c FROM deposits WHERE status='pending'").fetchone()["c"]
-    banned = conn.execute("SELECT COUNT(*) as c FROM users WHERE is_banned=1").fetchone()["c"]
-    conn.close()
+    s = admin_stats_row()
+    total_users = s["total_users"]
+    total_stock = s["total_stock"]
+    avail_stock = s["avail_stock"]
+    sold = s["sold"]
+    revenue = s["revenue"]
+    pending_orders = s["pending_orders"]
+    pending_deps = s["pending_deps"]
+    banned = s["banned"]
     text = (
         f"📊 *Bot Statistics*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -2314,17 +2850,15 @@ async def broadcast_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg_id or not chat_id:
         await query.edit_message_text("❌ No message to broadcast.")
         return
-    conn = get_db()
-    users = conn.execute("SELECT id FROM users WHERE is_banned=0").fetchall()
-    conn.close()
+    user_ids = broadcast_recipient_ids()
     success = 0
-    for u in users:
+    for uid in user_ids:
         try:
-            await context.bot.copy_message(chat_id=u["id"], from_chat_id=chat_id, message_id=msg_id)
+            await context.bot.copy_message(chat_id=uid, from_chat_id=chat_id, message_id=msg_id)
             success += 1
         except Exception:
             pass
-    await query.edit_message_text(f"✅ Broadcast sent to {success}/{len(users)} users.")
+    await query.edit_message_text(f"✅ Broadcast sent to {success}/{len(user_ids)} users.")
     context.user_data.pop("broadcast_msg_id", None)
     context.user_data.pop("broadcast_chat_id", None)
 
@@ -2351,6 +2885,7 @@ def main():
     # Commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_cmd))
+    app.add_handler(CommandHandler("update", update_cmd))
     app.add_handler(CommandHandler("skip", skip_cmd))
     # Main navigation
     app.add_handler(CallbackQueryHandler(main_menu_cb, pattern="^main_menu$"))
