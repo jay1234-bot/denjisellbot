@@ -32,7 +32,7 @@ from telethon.errors import SessionPasswordNeededError, FloodWaitError
 sys.path = _ORIG_SYS_PATH
 
 from pymongo import ASCENDING, MongoClient, ReturnDocument
-from pymongo.errors import PyMongoError
+from pymongo.errors import ConnectionFailure, PyMongoError, ServerSelectionTimeoutError
 
 from i18n import (
     apply_custom_emoji_html,
@@ -324,10 +324,11 @@ def lookup_dialing_code(raw: str):
 
 # ─── DATABASE (MongoDB) ───────────────────────────────────────────────────────
 _mongo_tls_workaround_installed = False
+_socket_getaddrinfo_orig: Any = None
 
 
 def _coerce_tls12_on_ssl_context(ctx: Any) -> Any:
-    """Atlas + OpenSSL 3 in Docker sometimes fails TLS 1.3 with TLSV1_ALERT_INTERNAL_ERROR; TLS 1.2 works."""
+    """Harden PyMongo SSL contexts for Atlas from Docker/VPS (TLS 1.2, cipher policy)."""
     if ctx is None:
         return None
     import ssl as stdssl
@@ -339,6 +340,10 @@ def _coerce_tls12_on_ssl_context(ctx: Any) -> Any:
                 ctx.maximum_version = stdssl.TLSVersion.TLSv1_2
             except (ValueError, OSError, AttributeError):
                 pass
+        try:
+            ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
+        except (ValueError, OSError, AttributeError):
+            pass
         return ctx
     inner = getattr(ctx, "_ctx", None)
     if inner is not None:
@@ -381,7 +386,36 @@ def _install_mongo_tls_workaround() -> None:
             pass
 
     _mongo_tls_workaround_installed = True
-    logger.info("MongoDB TLS: TLS 1.2 workaround active (set MONGODB_TLS_NO_WORKAROUND=1 to disable).")
+    logger.info("MongoDB TLS: SSL context workaround active (set MONGODB_TLS_NO_WORKAROUND=1 to disable).")
+
+
+def _install_mongo_socket_ipv4_for_atlas() -> None:
+    """Force IPv4 for *.mongodb.net — broken IPv6 routes on VPS often show up as TLSV1_ALERT_INTERNAL_ERROR."""
+    global _socket_getaddrinfo_orig
+    if _socket_getaddrinfo_orig is not None:
+        return
+    if os.environ.get("MONGODB_ALLOW_IPV6", "").strip().lower() in ("1", "true", "yes"):
+        return
+
+    import socket
+
+    _socket_getaddrinfo_orig = socket.getaddrinfo
+
+    def getaddrinfo_ipv4_for_atlas(
+        host: Any,
+        port: Any,
+        family: int = 0,
+        type: int = 0,
+        proto: int = 0,
+        flags: int = 0,
+    ) -> Any:
+        if isinstance(host, str) and ".mongodb.net" in host:
+            if family in (0, socket.AF_UNSPEC):
+                family = socket.AF_INET
+        return _socket_getaddrinfo_orig(host, port, family, type, proto, flags)
+
+    socket.getaddrinfo = getaddrinfo_ipv4_for_atlas  # type: ignore[method-assign]
+    logger.info("MongoDB: forcing IPv4 for *.mongodb.net (set MONGODB_ALLOW_IPV6=1 to use IPv6 too).")
 
 
 def _mongo_client_kwargs() -> Dict[str, Any]:
@@ -416,7 +450,39 @@ def get_mongo_client() -> MongoClient:
         )
     if _mongo_client is None:
         _install_mongo_tls_workaround()
-        _mongo_client = MongoClient(MONGODB_URI, **_mongo_client_kwargs())
+        _install_mongo_socket_ipv4_for_atlas()
+        base_opts = _mongo_client_kwargs()
+        extra_opts_list: List[Dict[str, Any]] = [{}]
+        if os.environ.get("MONGODB_NO_TLS_FALLBACK", "").strip().lower() not in ("1", "true", "yes"):
+            extra_opts_list.append({"tlsInsecure": True})
+
+        last_err: Optional[BaseException] = None
+        for i, extra in enumerate(extra_opts_list):
+            if extra.get("tlsInsecure"):
+                logger.warning(
+                    "MongoDB: retrying with tlsInsecure=True after TLS failure (MITM risk — "
+                    "set MONGODB_NO_TLS_FALLBACK=1 to disable this fallback once the network is fixed)."
+                )
+            client: Optional[MongoClient] = None
+            try:
+                client = MongoClient(MONGODB_URI, **{**base_opts, **extra})
+                client.admin.command("ping")
+                _mongo_client = client
+                return _mongo_client
+            except (ServerSelectionTimeoutError, ConnectionFailure) as e:
+                last_err = e
+                if client is not None:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+                msg = str(e).lower()
+                if i < len(extra_opts_list) - 1 and ("ssl" in msg or "tls" in msg):
+                    continue
+                raise
+        if last_err is not None:
+            raise last_err
+        raise RuntimeError("MongoDB: could not establish client")
     return _mongo_client
 
 
