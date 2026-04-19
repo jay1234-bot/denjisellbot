@@ -323,19 +323,87 @@ def lookup_dialing_code(raw: str):
     return None
 
 # ─── DATABASE (MongoDB) ───────────────────────────────────────────────────────
+_mongo_tls_workaround_installed = False
+
+
+def _coerce_tls12_on_ssl_context(ctx: Any) -> Any:
+    """Atlas + OpenSSL 3 in Docker sometimes fails TLS 1.3 with TLSV1_ALERT_INTERNAL_ERROR; TLS 1.2 works."""
+    if ctx is None:
+        return None
+    import ssl as stdssl
+
+    if isinstance(ctx, stdssl.SSLContext):
+        if hasattr(stdssl, "TLSVersion"):
+            try:
+                ctx.minimum_version = stdssl.TLSVersion.TLSv1_2
+                ctx.maximum_version = stdssl.TLSVersion.TLSv1_2
+            except (ValueError, OSError, AttributeError):
+                pass
+        return ctx
+    inner = getattr(ctx, "_ctx", None)
+    if inner is not None:
+        try:
+            from OpenSSL import SSL as ossl
+
+            if hasattr(ossl, "OP_NO_TLSv1_3"):
+                inner.set_options(ossl.OP_NO_TLSv1_3)
+        except Exception:
+            pass
+    return ctx
+
+
+def _install_mongo_tls_workaround() -> None:
+    """Patch PyMongo's SSL context factory (imported by name in client_options, not only ssl_support)."""
+    global _mongo_tls_workaround_installed
+    if _mongo_tls_workaround_installed:
+        return
+    if os.environ.get("MONGODB_TLS_NO_WORKAROUND", "").strip().lower() in ("1", "true", "yes"):
+        return
+
+    import pymongo.client_options as mco
+    import pymongo.ssl_support as mss
+
+    orig = mss.get_ssl_context
+
+    def get_ssl_context_wrapped(*args: Any, **kwargs: Any) -> Any:
+        return _coerce_tls12_on_ssl_context(orig(*args, **kwargs))
+
+    mss.get_ssl_context = get_ssl_context_wrapped
+    mco.get_ssl_context = get_ssl_context_wrapped
+    import importlib
+
+    for mod_name in ("pymongo.synchronous.encryption", "pymongo.asynchronous.encryption"):
+        try:
+            mod = importlib.import_module(mod_name)
+            if hasattr(mod, "get_ssl_context"):
+                setattr(mod, "get_ssl_context", get_ssl_context_wrapped)
+        except Exception:
+            pass
+
+    _mongo_tls_workaround_installed = True
+    logger.info("MongoDB TLS: TLS 1.2 workaround active (set MONGODB_TLS_NO_WORKAROUND=1 to disable).")
+
+
 def _mongo_client_kwargs() -> Dict[str, Any]:
-    """TLS options that fix Atlas handshakes in Docker (slim OpenSSL / CA paths)."""
-    opts: Dict[str, Any] = {"serverSelectionTimeoutMS": 30_000}
+    """TLS options for Atlas from Docker/VPS (CA bundle, OCSP, timeouts)."""
+    opts: Dict[str, Any] = {"serverSelectionTimeoutMS": 45_000}
     ca_env = os.environ.get("MONGODB_TLS_CA_FILE", "").strip()
     if ca_env and os.path.isfile(ca_env):
         opts["tlsCAFile"] = ca_env
-        return opts
-    try:
-        import certifi
+    else:
+        try:
+            import certifi
 
-        opts["tlsCAFile"] = certifi.where()
-    except ImportError:
-        pass
+            opts["tlsCAFile"] = certifi.where()
+        except ImportError:
+            pass
+    if os.environ.get("MONGODB_TLS_STRICT", "").strip().lower() not in ("1", "true", "yes"):
+        opts["tlsDisableOCSPEndpointCheck"] = True
+    if os.environ.get("MONGODB_TLS_INSECURE", "").strip().lower() in ("1", "true", "yes"):
+        opts["tlsInsecure"] = True
+        logger.warning(
+            "MONGODB_TLS_INSECURE is set — TLS verification is relaxed. Fix the host CA/TLS stack and unset this."
+        )
     return opts
 
 
@@ -347,6 +415,7 @@ def get_mongo_client() -> MongoClient:
             "(e.g. mongodb+srv://user:pass@cluster/telegram_bot?retryWrites=true&w=majority)."
         )
     if _mongo_client is None:
+        _install_mongo_tls_workaround()
         _mongo_client = MongoClient(MONGODB_URI, **_mongo_client_kwargs())
     return _mongo_client
 
