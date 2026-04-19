@@ -1,7 +1,7 @@
 # Number store Telegram bot — single-stage image (no requirements.txt).
 # Required: -e MONGODB_URI=...
-# Optional TLS (see bot.py): MONGODB_TLS_CA_FILE, MONGODB_TLS_STRICT=1, MONGODB_TLS_NO_WORKAROUND=1,
-#   MONGODB_TLS_INSECURE=1 (last resort only — weakens verification).
+# Optional Mongo (see bot.py): MONGODB_TLS_CA_FILE, MONGODB_TLS_STRICT=1, MONGODB_TLS_NO_WORKAROUND=1,
+#   MONGODB_TLS_INSECURE=1, MONGODB_ALLOW_IPV6=1, MONGODB_NO_TLS_FALLBACK=1 (disables insecure retry).
 
 # Python 3.11 avoids several Atlas TLS handshake issues seen with 3.12 + OpenSSL 3.2
 # (e.g. SSL: TLSV1_ALERT_INTERNAL_ERROR on mongodb+srv from slim containers).
