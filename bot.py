@@ -45,12 +45,12 @@ from i18n import (
 )
 
 # ─── CONFIG ─────────────────────────────────────────────────────────────────
-BOT_TOKEN = "8638333892:AAGNOYyLWE2KuQJF8gmCvVbkc-aP0tpVcBI"
+BOT_TOKEN = "8642856603:AAGXRxr7Te7zFYMjfsIpY2tHHBehAiBmsHo"
 ADMIN_IDS = [8746242371, 8333954027]
 ADMIN_GROUP_ID = -1003564044316
 # Successful buy logs will be sent here (set your channel/group id)
 LOG_GROUP_ID = -1003929185913
-STORE_BOT_USERNAME = "XR_OTP_BOT"
+STORE_BOT_USERNAME = "ID_SELLING_BOT"
 START_IMAGE_URL = "https://te.legra.ph/file/3e40a408286d4eda24191.jpg"
 API_ID    = 22091901
 API_HASH  = "54b0cd5fb47a40265b197f1a110b20b8"
@@ -323,6 +323,22 @@ def lookup_dialing_code(raw: str):
     return None
 
 # ─── DATABASE (MongoDB) ───────────────────────────────────────────────────────
+def _mongo_client_kwargs() -> Dict[str, Any]:
+    """TLS options that fix Atlas handshakes in Docker (slim OpenSSL / CA paths)."""
+    opts: Dict[str, Any] = {"serverSelectionTimeoutMS": 30_000}
+    ca_env = os.environ.get("MONGODB_TLS_CA_FILE", "").strip()
+    if ca_env and os.path.isfile(ca_env):
+        opts["tlsCAFile"] = ca_env
+        return opts
+    try:
+        import certifi
+
+        opts["tlsCAFile"] = certifi.where()
+    except ImportError:
+        pass
+    return opts
+
+
 def get_mongo_client() -> MongoClient:
     global _mongo_client
     if not MONGODB_URI:
@@ -331,7 +347,7 @@ def get_mongo_client() -> MongoClient:
             "(e.g. mongodb+srv://user:pass@cluster/telegram_bot?retryWrites=true&w=majority)."
         )
     if _mongo_client is None:
-        _mongo_client = MongoClient(MONGODB_URI)
+        _mongo_client = MongoClient(MONGODB_URI, **_mongo_client_kwargs())
     return _mongo_client
 
 
