@@ -45,7 +45,7 @@ from i18n import (
 )
 
 # ─── CONFIG ─────────────────────────────────────────────────────────────────
-BOT_TOKEN = "8642856603:AAGXRxr7Te7zFYMjfsIpY2tHHBehAiBmsHo"
+BOT_TOKEN = "8638333892:AAGNOYyLWE2KuQJF8gmCvVbkc-aP0tpVcBI"
 ADMIN_IDS = [8746242371, 8333954027]
 ADMIN_GROUP_ID = -1003564044316
 # Successful buy logs will be sent here (set your channel/group id)
@@ -53,7 +53,7 @@ LOG_GROUP_ID = -1003928300714
 FORCE_CHANNEL_1 = -1003929185913
 FORCE_CHANNEL_2 = -1003530760311
 FORCE_CHANNEL_3 = -1003928300714
-STORE_BOT_USERNAME = "ID_SELLING_BOT"
+STORE_BOT_USERNAME = "XR_OTP_BOT"
 START_IMAGE_URL = "https://te.legra.ph/file/3e40a408286d4eda24191.jpg"
 API_ID    = 22091901
 API_HASH  = "54b0cd5fb47a40265b197f1a110b20b8"
