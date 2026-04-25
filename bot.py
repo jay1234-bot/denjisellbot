@@ -1441,13 +1441,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Start log send failed: {e}")
     msg = render_welcome_message(user)
-    # Send spoiler image with keyboard attached.
-    # All callback handlers use safe edit helpers to avoid Telegram errors.
+    # Send image + caption in one message (no spoiler for better caption compatibility).
     await update.message.reply_photo(
         photo=START_IMAGE_URL,
         caption=msg,
         parse_mode="HTML",
-        has_spoiler=True,
+        has_spoiler=False,
         reply_markup=main_menu_kb(),
     )
 
