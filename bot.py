@@ -55,8 +55,8 @@ FORCE_CHANNEL_2 = -1003530760311
 FORCE_CHANNEL_3 = -1003928300714
 STORE_BOT_USERNAME = "XR_OTP_BOT"
 START_IMAGE_URL = "https://te.legra.ph/file/3e40a408286d4eda24191.jpg"
-API_ID    = 24173304
-API_HASH  = "cd99b94d8661fa2912324c3cfbfac6c9"
+API_ID    = 22091901
+API_HASH  = "54b0cd5fb47a40265b197f1a110b20b8"
 UPI_ID = "maurya.xq@fam"
 # Set MONGODB_URI in the environment to your Atlas connection string (do not commit secrets).
 MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb+srv://k05170492_db_user:xwiVDkW69VgeSSTE@cluster0.etkmxtd.mongodb.net/telegram_bot?retryWrites=true&w=majority").strip()
@@ -1441,12 +1441,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Start log send failed: {e}")
     msg = render_welcome_message(user)
-    # Send image + caption in one message (no spoiler for better caption compatibility).
+    # Send image + caption in one message.
     await update.message.reply_photo(
         photo=START_IMAGE_URL,
         caption=msg,
         parse_mode="HTML",
-        has_spoiler=False,
+        has_spoiler=True,
         reply_markup=main_menu_kb(),
     )
 
@@ -3210,36 +3210,6 @@ async def skip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-async def debugemoji_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if not user or not is_admin(user.id):
-        await update.effective_message.reply_text("❌ Admin only.")
-        return
-    test_html = (
-        '<tg-emoji emoji-id="6026162407066309019">✨</tg-emoji> '
-        '<tg-emoji emoji-id="5352919308391424163">🔥</tg-emoji> '
-        '<tg-emoji emoji-id="6122738552057894402">✅</tg-emoji> '
-        '<tg-emoji emoji-id="5372917041193828849">🚀</tg-emoji>\n'
-        "<b>debug custom emoji test</b>"
-    )
-    sent = await update.effective_message.reply_text(test_html, parse_mode="HTML")
-    entities = getattr(sent, "entities", None) or []
-    custom_ids = []
-    for e in entities:
-        if str(getattr(e, "type", "")) == "custom_emoji":
-            custom_ids.append(str(getattr(e, "custom_emoji_id", "")))
-    status = "YES" if custom_ids else "NO"
-    lines = [
-        "🧪 /debugemoji report",
-        f"custom_emoji_entities: {status}",
-        f"count: {len(custom_ids)}",
-    ]
-    if custom_ids:
-        lines.append("ids: " + ", ".join(custom_ids))
-    else:
-        lines.append("ids: none (Telegram rendered plain emoji/fallback)")
-    await update.effective_message.reply_text("\n".join(lines))
-
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 def main():
     init_db()
@@ -3255,7 +3225,6 @@ def main():
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CommandHandler("update", update_cmd))
     app.add_handler(CommandHandler("skip", skip_cmd))
-    app.add_handler(CommandHandler("debugemoji", debugemoji_cmd))
     # Main navigation
     app.add_handler(CallbackQueryHandler(main_menu_cb, pattern="^main_menu$"))
     app.add_handler(CallbackQueryHandler(browse_numbers, pattern=r"^browse_\d+$"))
