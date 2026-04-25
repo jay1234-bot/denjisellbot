@@ -3209,6 +3209,37 @@ async def skip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏭ Skip (use country price)", callback_data="add_acc_skip_price")]])
         )
 
+
+async def debugemoji_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        await update.effective_message.reply_text("❌ Admin only.")
+        return
+    test_html = (
+        '<tg-emoji emoji-id="6026162407066309019">✨</tg-emoji> '
+        '<tg-emoji emoji-id="5352919308391424163">🔥</tg-emoji> '
+        '<tg-emoji emoji-id="6122738552057894402">✅</tg-emoji> '
+        '<tg-emoji emoji-id="5372917041193828849">🚀</tg-emoji>\n'
+        "<b>debug custom emoji test</b>"
+    )
+    sent = await update.effective_message.reply_text(test_html, parse_mode="HTML")
+    entities = getattr(sent, "entities", None) or []
+    custom_ids = []
+    for e in entities:
+        if str(getattr(e, "type", "")) == "custom_emoji":
+            custom_ids.append(str(getattr(e, "custom_emoji_id", "")))
+    status = "YES" if custom_ids else "NO"
+    lines = [
+        "🧪 /debugemoji report",
+        f"custom_emoji_entities: {status}",
+        f"count: {len(custom_ids)}",
+    ]
+    if custom_ids:
+        lines.append("ids: " + ", ".join(custom_ids))
+    else:
+        lines.append("ids: none (Telegram rendered plain emoji/fallback)")
+    await update.effective_message.reply_text("\n".join(lines))
+
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 def main():
     init_db()
@@ -3224,6 +3255,7 @@ def main():
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CommandHandler("update", update_cmd))
     app.add_handler(CommandHandler("skip", skip_cmd))
+    app.add_handler(CommandHandler("debugemoji", debugemoji_cmd))
     # Main navigation
     app.add_handler(CallbackQueryHandler(main_menu_cb, pattern="^main_menu$"))
     app.add_handler(CallbackQueryHandler(browse_numbers, pattern=r"^browse_\d+$"))
