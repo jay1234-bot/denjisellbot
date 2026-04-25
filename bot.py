@@ -1282,15 +1282,42 @@ async def enforce_force_sub(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     channels = force_channel_ids()
     if not channels:
         return True
-    now_ts = datetime.now(timezone.utc).timestamp()
-    ok_until = float(context.user_data.get("force_sub_ok_until", 0) or 0)
-    if ok_until > now_ts:
-        return True
     missing = await _force_sub_status(context.bot, user.id, channels)
     if missing:
         await _send_force_sub_prompt(update, context, missing)
         return False
-    context.user_data["force_sub_ok_until"] = now_ts + 120.0
+    return True
+
+
+async def force_sub_check_with_wait(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Force-sub check for /start:
+    - Non-admin users are checked every time
+    - Shows temporary checking message while validating memberships
+    """
+    user = update.effective_user
+    if not user or is_admin(user.id):
+        return True
+    channels = force_channel_ids()
+    if not channels:
+        return True
+    wait_msg = None
+    if update.effective_message:
+        try:
+            wait_msg = await update.effective_message.reply_text("Checking fsub wait please....")
+        except Exception:
+            wait_msg = None
+    try:
+        missing = await _force_sub_status(context.bot, user.id, channels)
+    finally:
+        if wait_msg is not None:
+            try:
+                await wait_msg.delete()
+            except Exception:
+                pass
+    if missing:
+        await _send_force_sub_prompt(update, context, missing)
+        return False
     return True
 
 async def safe_edit_callback_message(query, *, text: str, parse_mode: str, reply_markup=None):
@@ -1372,13 +1399,13 @@ async def guard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.effective_message.reply_text(err)
         return True
-    if not await enforce_force_sub(update, context):
-        return True
     return False
 
 # ─── /start ──────────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await guard(update, context):
+        return
+    if not await force_sub_check_with_wait(update, context):
         return
     user = update.effective_user
     if user:
@@ -1502,7 +1529,8 @@ async def noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def force_verify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    context.user_data["force_sub_ok_until"] = 0
+    if not await enforce_force_sub(update, context):
+        return
     if await guard(update, context):
         return
     msg = render_welcome_message(update.effective_user)
