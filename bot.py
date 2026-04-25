@@ -1196,6 +1196,23 @@ def main_menu_kb():
 def render_welcome_message(user):
     full_name = " ".join(x for x in [getattr(user, "first_name", ""), getattr(user, "last_name", "")] if x) or "User"
     template = get_setting("welcome_message", welcome_default_template())
+    # If admin-saved welcome text contains plain emojis (not {{e:*}} placeholders),
+    # upgrade common symbols so premium custom emojis can render.
+    if "{{e:" not in template:
+        template = (
+            template.replace("✨", "{{e:sparkle}}")
+            .replace("⭐", "{{e:star}}")
+            .replace("🚀", "{{e:rocket}}")
+            .replace("💰", "{{e:wallet}}")
+            .replace("📦", "{{e:package}}")
+            .replace("🔒", "{{e:lock}}")
+            .replace("✅", "{{e:check}}")
+            .replace("❌", "{{e:cross}}")
+            .replace("🔥", "{{e:fire}}")
+            .replace("🌍", "{{e:globe}}")
+            .replace("📊", "{{e:chart}}")
+            .replace("📢", "{{e:megaphone}}")
+        )
     safe_name = escape(full_name)
     raw = template.replace("{user_name}", safe_name)
     return apply_custom_emoji_html(raw)
