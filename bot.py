@@ -45,7 +45,7 @@ from i18n import (
 )
 
 # ─── CONFIG ─────────────────────────────────────────────────────────────────
-BOT_TOKEN = "8638333892:AAGNOYyLWE2KuQJF8gmCvVbkc-aP0tpVcBI"
+BOT_TOKEN = "8638333892:AAESPNcXZDOoFiWUwnLYBbrTSvQX9qBultY"
 ADMIN_IDS = [8746242371, 8333954027]
 ADMIN_GROUP_ID = -1003564044316
 # Successful buy logs will be sent here (set your channel/group id)
@@ -55,8 +55,8 @@ FORCE_CHANNEL_2 = -1003530760311
 FORCE_CHANNEL_3 = -1003928300714
 STORE_BOT_USERNAME = "XR_OTP_BOT"
 START_IMAGE_URL = "https://te.legra.ph/file/3e40a408286d4eda24191.jpg"
-API_ID    = 22091901
-API_HASH  = "54b0cd5fb47a40265b197f1a110b20b8"
+API_ID    = 24173304
+API_HASH  = "cd99b94d8661fa2912324c3cfbfac6c9"
 UPI_ID = "maurya.xq@fam"
 # Set MONGODB_URI in the environment to your Atlas connection string (do not commit secrets).
 MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb+srv://k05170492_db_user:xwiVDkW69VgeSSTE@cluster0.etkmxtd.mongodb.net/telegram_bot?retryWrites=true&w=majority").strip()
