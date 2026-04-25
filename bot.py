@@ -45,12 +45,15 @@ from i18n import (
 )
 
 # ─── CONFIG ─────────────────────────────────────────────────────────────────
-BOT_TOKEN = "8638333892:AAGNOYyLWE2KuQJF8gmCvVbkc-aP0tpVcBI"
+BOT_TOKEN = "8642856603:AAGXRxr7Te7zFYMjfsIpY2tHHBehAiBmsHo"
 ADMIN_IDS = [8746242371, 8333954027]
 ADMIN_GROUP_ID = -1003564044316
 # Successful buy logs will be sent here (set your channel/group id)
-LOG_GROUP_ID = -1003929185913
-STORE_BOT_USERNAME = "XR_OTP_BOT"
+LOG_GROUP_ID = -1003928300714
+FORCE_CHANNEL_1 = -1003929185913
+FORCE_CHANNEL_2 = -1003530760311
+FORCE_CHANNEL_3 = -1003928300714
+STORE_BOT_USERNAME = "ID_SELLING_BOT"
 START_IMAGE_URL = "https://te.legra.ph/file/3e40a408286d4eda24191.jpg"
 API_ID    = 22091901
 API_HASH  = "54b0cd5fb47a40265b197f1a110b20b8"
@@ -63,6 +66,7 @@ GITHUB_DEFAULT_BRANCH = os.environ.get("GITHUB_DEFAULT_BRANCH", "main")
 IST = timezone(timedelta(hours=5, minutes=30))
 
 _mongo_client: Optional[MongoClient] = None
+_force_link_cache: Dict[int, str] = {}
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -621,13 +625,26 @@ def get_stock_count(code):
 
 def list_browse_countries() -> List[Dict[str, Any]]:
     db = get_mongo()
-    out = []
-    for c in db.countries.find({"enabled": 1}).sort("name", ASCENDING):
-        stock = db.accounts.count_documents({"country_code": c["code"], "is_sold": 0})
-        if stock > 0:
-            row = dict(c)
-            row["stock_count"] = stock
-            out.append(row)
+    stock_rows = db.accounts.aggregate(
+        [
+            {"$match": {"is_sold": 0}},
+            {"$group": {"_id": "$country_code", "stock_count": {"$sum": 1}}},
+        ]
+    )
+    stock_map: Dict[str, int] = {
+        str(r.get("_id") or ""): int(r.get("stock_count") or 0) for r in stock_rows if r.get("_id")
+    }
+    if not stock_map:
+        return []
+    out: List[Dict[str, Any]] = []
+    for c in db.countries.find({"enabled": 1, "code": {"$in": list(stock_map.keys())}}).sort("name", ASCENDING):
+        code = str(c.get("code") or "")
+        stock = stock_map.get(code, 0)
+        if stock <= 0:
+            continue
+        row = dict(c)
+        row["stock_count"] = stock
+        out.append(row)
     return out
 
 
@@ -1183,6 +1200,99 @@ def render_welcome_message(user):
     raw = template.replace("{user_name}", safe_name)
     return apply_custom_emoji_html(raw)
 
+
+def force_channel_ids() -> List[int]:
+    out: List[int] = []
+    for cid in (FORCE_CHANNEL_1, FORCE_CHANNEL_2, FORCE_CHANNEL_3):
+        try:
+            val = int(cid)
+        except (TypeError, ValueError):
+            continue
+        if val:
+            out.append(val)
+    return out
+
+
+async def _resolve_force_join_url(bot: Bot, chat_id: int) -> str:
+    if chat_id in _force_link_cache:
+        return _force_link_cache[chat_id]
+    url = ""
+    try:
+        chat = await bot.get_chat(chat_id)
+        username = getattr(chat, "username", None)
+        if username:
+            url = f"https://t.me/{username}"
+        else:
+            invite = await bot.create_chat_invite_link(chat_id=chat_id)
+            url = invite.invite_link
+    except Exception:
+        url = ""
+    _force_link_cache[chat_id] = url
+    return url
+
+
+async def _send_force_sub_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, missing_channels: List[int]) -> None:
+    header = (
+        "<b>ʏᴏᴜ ᴛʀʏɪɴɢ ᴛᴏ ʟɪᴇ ᴍᴇ ʙɪᴛᴄʜ ?</b>\n"
+        "<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
+        "<b>ᴀᴄᴄᴏʀᴅɪɴɢ ᴛᴏ ᴍʏ ᴅᴀᴛᴀʙᴀꜱᴇ ʏᴏᴜ ʜᴀᴠᴇ ɴᴏᴛ ᴊᴏɪɴᴇᴅ ᴛʜᴇ ᴄʜᴀɴɴᴇʟꜱ.</b>\n"
+        "<b>ᴘʟᴇᴀꜱᴇ ᴊᴏɪɴ ᴍʏ ᴅᴀᴛᴀʙᴀꜱᴇ ᴀɴᴅ ᴛʜᴇɴ ʀᴇᴛʀʏ ᴍᴇ ʙᴀʙʏ.</b>"
+    )
+    rows = []
+    for i, channel_id in enumerate(missing_channels[:3], start=1):
+        join_url = await _resolve_force_join_url(context.bot, channel_id)
+        label = f"📢 {sc(f'join channel {i}')}"
+        if join_url:
+            rows.append([ibutton_raw(label, url=join_url, icon_slot="globe", style="success")])
+        else:
+            rows.append([ibutton_raw(label, callback_data="force_missing_link", icon_slot="cross", style="danger")])
+    rows.append([ibutton_raw(f"✅ {sc('verify')}", callback_data="force_verify", icon_slot="check", style="success")])
+    rows.append([ibutton_raw(f"❌ {sc('close')}", callback_data="force_close", icon_slot="cross", style="danger")])
+    kb = InlineKeyboardMarkup(rows)
+    if update.callback_query:
+        await safe_edit_callback_message(update.callback_query, text=header, parse_mode="HTML", reply_markup=kb)
+        return
+    if update.effective_message:
+        await update.effective_message.reply_photo(
+            photo=START_IMAGE_URL,
+            caption=header,
+            parse_mode="HTML",
+            has_spoiler=True,
+            reply_markup=kb,
+        )
+
+
+async def _force_sub_status(bot: Bot, user_id: int, channels: List[int]) -> List[int]:
+    checks = [bot.get_chat_member(chat_id=cid, user_id=user_id) for cid in channels]
+    results = await asyncio.gather(*checks, return_exceptions=True)
+    missing: List[int] = []
+    for cid, res in zip(channels, results):
+        if isinstance(res, Exception):
+            missing.append(cid)
+            continue
+        if getattr(res, "status", "") not in {"member", "administrator", "creator"}:
+            missing.append(cid)
+    return missing
+
+
+async def enforce_force_sub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    user = update.effective_user
+    if not user or is_admin(user.id):
+        return True
+    channels = force_channel_ids()
+    if not channels:
+        return True
+    now_ts = datetime.now(timezone.utc).timestamp()
+    ok_until = float(context.user_data.get("force_sub_ok_until", 0) or 0)
+    if ok_until > now_ts:
+        return True
+    missing = await _force_sub_status(context.bot, user.id, channels)
+    if missing:
+        await _send_force_sub_prompt(update, context, missing)
+        return False
+    context.user_data["force_sub_ok_until"] = now_ts + 120.0
+    return True
+
 async def safe_edit_callback_message(query, *, text: str, parse_mode: str, reply_markup=None):
     """
     If the callback message is a photo, Telegram only allows editing the caption.
@@ -1261,6 +1371,8 @@ async def guard(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.callback_query.answer(err, show_alert=True)
         else:
             await update.effective_message.reply_text(err)
+        return True
+    if not await enforce_force_sub(update, context):
         return True
     return False
 
@@ -1385,6 +1497,36 @@ async def oos_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
+
+
+async def force_verify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data["force_sub_ok_until"] = 0
+    if await guard(update, context):
+        return
+    msg = render_welcome_message(update.effective_user)
+    await safe_edit_callback_message(query, text=msg, parse_mode="HTML", reply_markup=main_menu_kb())
+
+
+async def force_close_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Closed.", show_alert=False)
+    try:
+        await query.message.delete()
+    except Exception:
+        await safe_edit_callback_message(
+            query,
+            text="<b>ᴊᴏɪɴ ᴀʟʟ ᴄʜᴀɴɴᴇʟꜱ ᴀɴᴅ ᴘʀᴇꜱꜱ ᴠᴇʀɪꜰʏ.</b>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                [[ibutton_raw(f"✅ {sc('verify')}", callback_data="force_verify", icon_slot="check", style="success")]]
+            ),
+        )
+
+
+async def force_missing_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer("Join link unavailable. Set channel public username or check bot rights.", show_alert=True)
 
 # ─── COUNTRY DETAIL ──────────────────────────────────────────────────────────
 async def country_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3043,6 +3185,9 @@ def main():
     app.add_handler(CallbackQueryHandler(browse_numbers, pattern=r"^browse_\d+$"))
     app.add_handler(CallbackQueryHandler(oos_callback, pattern=r"^oos_"))
     app.add_handler(CallbackQueryHandler(noop_callback, pattern="^noop$"))
+    app.add_handler(CallbackQueryHandler(force_verify_callback, pattern="^force_verify$"))
+    app.add_handler(CallbackQueryHandler(force_close_callback, pattern="^force_close$"))
+    app.add_handler(CallbackQueryHandler(force_missing_link_callback, pattern="^force_missing_link$"))
     app.add_handler(CallbackQueryHandler(country_detail, pattern=r"^country_[A-Z]+$"))
     app.add_handler(CallbackQueryHandler(wallet_buy, pattern=r"^wallet_buy_"))
     app.add_handler(CallbackQueryHandler(pay_method, pattern=r"^pay_method_"))
