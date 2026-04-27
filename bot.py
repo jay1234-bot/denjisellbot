@@ -19,7 +19,7 @@ from telegram import (
 )
 from telegram.ext import (
     Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler,
-    ConversationHandler, MessageHandler, ContextTypes, filters
+    ConversationHandler, MessageHandler, ContextTypes, TypeHandler, filters
 )
 
 # Prevent local "telethon.py" from shadowing the real telethon package.
@@ -45,11 +45,11 @@ from i18n import (
 )
 
 # ─── CONFIG ─────────────────────────────────────────────────────────────────
-BOT_TOKEN = "8638333892:AAESPNcXZDOoFiWUwnLYBbrTSvQX9qBultY"
+BOT_TOKEN = "8638333892:AAGNOYyLWE2KuQJF8gmCvVbkc-aP0tpVcBI"
 ADMIN_IDS = [8746242371, 8333954027]
-ADMIN_GROUP_ID = -1003564044316
-# Successful buy logs will be sent here (set your channel/group id)
-LOG_GROUP_ID = -1003928300714
+ADMIN_GROUP_ID = int(os.environ.get("ADMIN_GROUP_ID", os.environ.get("admin_group_id", "-1003564044316")))
+# Successful buy logs will be sent here.
+LOG_GROUP_ID = int(os.environ.get("LOG_GROUP_ID", os.environ.get("log_group_id", "-1003928300714")))
 FORCE_CHANNEL_1 = -1003929185913
 FORCE_CHANNEL_2 = -1003530760311
 FORCE_CHANNEL_3 = -1003928300714
@@ -424,7 +424,13 @@ def _install_mongo_socket_ipv4_for_atlas() -> None:
 
 def _mongo_client_kwargs() -> Dict[str, Any]:
     """TLS options for Atlas from Docker/VPS (CA bundle, OCSP, timeouts)."""
-    opts: Dict[str, Any] = {"serverSelectionTimeoutMS": 45_000}
+    opts: Dict[str, Any] = {
+        "serverSelectionTimeoutMS": 45_000,
+        "connectTimeoutMS": 12_000,
+        "socketTimeoutMS": 20_000,
+        "maxPoolSize": 100,
+        "minPoolSize": 5,
+    }
     ca_env = os.environ.get("MONGODB_TLS_CA_FILE", "").strip()
     if ca_env and os.path.isfile(ca_env):
         opts["tlsCAFile"] = ca_env
@@ -580,7 +586,12 @@ def register_user(user):
     db.users.update_one(
         {"id": user.id},
         {
-            "$set": {"username": user.username or "", "first_name": user.first_name or ""},
+            "$set": {
+                "username": user.username or "",
+                "first_name": user.first_name or "",
+                "last_name": user.last_name or "",
+                "last_seen_at": now,
+            },
             "$setOnInsert": {
                 "id": user.id,
                 "is_banned": 0,
@@ -591,6 +602,16 @@ def register_user(user):
         },
         upsert=True,
     )
+
+
+async def track_user_update(update: object, context: ContextTypes.DEFAULT_TYPE):
+    tg_update = update if isinstance(update, Update) else None
+    if not tg_update or not tg_update.effective_user:
+        return
+    try:
+        register_user(tg_update.effective_user)
+    except Exception:
+        logger.exception("track_user_update")
 
 
 def is_banned(user_id):
@@ -1250,10 +1271,10 @@ async def _resolve_force_join_url(bot: Bot, chat_id: int) -> str:
 
 async def _send_force_sub_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, missing_channels: List[int]) -> None:
     header = (
-        "<b>ʏᴏᴜ ᴛʀʏɪɴɢ ᴛᴏ ʟɪᴇ ᴍᴇ ʙɪᴛᴄʜ ?</b>\n"
+        "<b>⚠️ ꜰꜱᴜʙ ᴄʜᴇᴄᴋ ꜰᴀɪʟᴇᴅ</b>\n"
         "<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
-        "<b>ᴀᴄᴄᴏʀᴅɪɴɢ ᴛᴏ ᴍʏ ᴅᴀᴛᴀʙᴀꜱᴇ ʏᴏᴜ ʜᴀᴠᴇ ɴᴏᴛ ᴊᴏɪɴᴇᴅ ᴛʜᴇ ᴄʜᴀɴɴᴇʟꜱ.</b>\n"
-        "<b>ᴘʟᴇᴀꜱᴇ ᴊᴏɪɴ ᴍʏ ᴅᴀᴛᴀʙᴀꜱᴇ ᴀɴᴅ ᴛʜᴇɴ ʀᴇᴛʀʏ ᴍᴇ ʙᴀʙʏ.</b>"
+        "<b>ᴀᴄᴄᴏʀᴅɪɴɢ ᴛᴏ ᴍʏ ᴅᴀᴛᴀʙᴀꜱᴇ, ʏᴏᴜ ʜᴀᴠᴇ ɴᴏᴛ ᴊᴏɪɴᴇᴅ ᴀʟʟ required ᴄʜᴀɴɴᴇʟꜱ.</b>\n"
+        "<b>ᴘʟᴇᴀꜱᴇ ᴊᴏɪɴ ᴛʜᴇᴍ ᴀɴᴅ ᴘʀᴇꜱꜱ ✅ ᴠᴇʀɪꜰʏ ᴀɢᴀɪɴ.</b>"
     )
     rows = []
     for i, channel_id in enumerate(missing_channels[:3], start=1):
@@ -1321,7 +1342,7 @@ async def force_sub_check_with_wait(update: Update, context: ContextTypes.DEFAUL
     wait_msg = None
     if update.effective_message:
         try:
-            wait_msg = await update.effective_message.reply_text("Checking fsub wait please....")
+            wait_msg = await update.effective_message.reply_text("⚡ ᴄʜᴇᴄᴋɪɴɢ ʏᴏᴜʀ ᴊᴏɪɴ sᴛᴀᴛᴜs...")
         except Exception:
             wait_msg = None
     try:
@@ -1403,6 +1424,22 @@ async def send_buy_log(context: ContextTypes.DEFAULT_TYPE, country_name, country
     except Exception as e:
         logger.error(f"Failed to send buy log: {e}")
 
+
+async def send_start_log(context: ContextTypes.DEFAULT_TYPE, user) -> None:
+    if not ADMIN_GROUP_ID or not user:
+        return
+    full_name = " ".join(x for x in [user.first_name, user.last_name] if x) or "User"
+    mention = f"<a href='tg://user?id={user.id}'>{escape(full_name)}</a>"
+    uname = f"@{escape(user.username)}" if user.username else "<i>not_set</i>"
+    admin_log = (
+        "🚀 <b>ɴᴇᴡ ʙᴏᴛ sᴛᴀʀᴛ</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>ᴜsᴇʀ:</b> {mention}\n"
+        f"🔖 <b>ᴜsᴇʀɴᴀᴍᴇ:</b> {uname}\n"
+        f"🆔 <b>ɪᴅ:</b> <code>{user.id}</code>"
+    )
+    await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=admin_log, parse_mode="HTML")
+
 # ─── GUARD DECORATOR ─────────────────────────────────────────────────────────
 async def guard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1427,17 +1464,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user:
         try:
-            full_name = " ".join(x for x in [user.first_name, user.last_name] if x) or "User"
-            mention = f"<a href='tg://user?id={user.id}'>{escape(full_name)}</a>"
-            uname = f"@{escape(user.username)}" if user.username else "<i>not_set</i>"
-            admin_log = (
-                "🚀 <b>ɴᴇᴡ ʙᴏᴛ sᴛᴀʀᴛ</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                f"👤 <b>ᴜsᴇʀ:</b> {mention}\n"
-                f"🔖 <b>ᴜsᴇʀɴᴀᴍᴇ:</b> {uname}\n"
-                f"🆔 <b>ɪᴅ:</b> <code>{user.id}</code>"
-            )
-            await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=admin_log, parse_mode="HTML")
+            await send_start_log(context, user)
         except Exception as e:
             logger.error(f"Start log send failed: {e}")
     msg = render_welcome_message(user)
@@ -1561,7 +1588,10 @@ async def force_close_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception:
         await safe_edit_callback_message(
             query,
-            text="<b>ᴊᴏɪɴ ᴀʟʟ ᴄʜᴀɴɴᴇʟꜱ ᴀɴᴅ ᴘʀᴇꜱꜱ ᴠᴇʀɪꜰʏ.</b>",
+            text=(
+                "<b>⚠️ ʏᴏᴜ ᴀʀᴇ ɴᴏᴛ ᴊᴏɪɴᴇᴅ ʏᴇᴛ.</b>\n"
+                "<b>ᴊᴏɪɴ ᴀʟʟ required ᴄʜᴀɴɴᴇʟꜱ ᴀɴᴅ ᴘʀᴇꜱꜱ ✅ ᴠᴇʀɪꜰʏ.</b>"
+            ),
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
                 [[ibutton_raw(f"✅ {sc('verify')}", callback_data="force_verify", icon_slot="check", style="success")]]
@@ -3213,12 +3243,20 @@ async def skip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 def main():
     init_db()
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .concurrent_updates(True)
+        .build()
+    )
 
     async def _global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
         # Keep logs clean: avoid long stack traces in terminal.
         err = context.error
         logger.error(f"Bot error: {type(err).__name__}: {err}")
+
+    # Keep users stored/updated from every incoming update.
+    app.add_handler(TypeHandler(Update, track_user_update), group=-1)
 
     # Commands
     app.add_handler(CommandHandler("start", start))
