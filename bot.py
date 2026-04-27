@@ -45,7 +45,7 @@ from i18n import (
 )
 
 # ─── CONFIG ─────────────────────────────────────────────────────────────────
-BOT_TOKEN = "8638333892:AAESPNcXZDOoFiWUwnLYBbrTSvQX9qBultY"
+BOT_TOKEN = "8638333892:AAGNOYyLWE2KuQJF8gmCvVbkc-aP0tpVcBI"
 ADMIN_IDS = [8746242371, 8333954027]
 ADMIN_GROUP_ID = int(os.environ.get("ADMIN_GROUP_ID", os.environ.get("admin_group_id", "-1003564044316")))
 # Successful buy logs will be sent here.
@@ -1459,14 +1459,20 @@ async def guard(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await guard(update, context):
         return
-    if not await force_sub_check_with_wait(update, context):
-        return
     user = update.effective_user
     if user:
         try:
+            # Ensure user is saved on every /start, even when force-sub blocks next steps.
+            register_user(user)
+        except Exception:
+            logger.exception("register_user failed in /start")
+        try:
+            # Send /start log before force-sub check so starts blocked by force-sub are still logged.
             await send_start_log(context, user)
         except Exception as e:
             logger.error(f"Start log send failed: {e}")
+    if not await force_sub_check_with_wait(update, context):
+        return
     msg = render_welcome_message(user)
     # Send image + caption in one message.
     await update.message.reply_photo(
