@@ -46,7 +46,7 @@ from i18n import (
 
 # ─── CONFIG ─────────────────────────────────────────────────────────────────
 BOT_TOKEN = "8638333892:AAESPNcXZDOoFiWUwnLYBbrTSvQX9qBultY"
-ADMIN_IDS = [8746242371, 8333954027]
+ADMIN_IDS = [8746242371, 8333954027, 8666688867]
 ADMIN_GROUP_ID = int(os.environ.get("ADMIN_GROUP_ID", os.environ.get("admin_group_id", "-1003564044316")))
 # Successful buy logs will be sent here.
 LOG_GROUP_ID = int(os.environ.get("LOG_GROUP_ID", os.environ.get("log_group_id", "-1003928300714")))
